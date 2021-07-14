@@ -1,9 +1,9 @@
 // Copyright 2003 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "Core/PowerPC/MMU.h"
 
+#include <cassert>
 #include <cstddef>
 #include <cstring>
 #include <string>
@@ -207,7 +207,7 @@ static T ReadFromHardware(u32 em_address)
 
   // TODO: Make sure these are safe for unaligned addresses.
 
-  if ((em_address & 0xF8000000) == 0x00000000)
+  if (Memory::m_pRAM && (em_address & 0xF8000000) == 0x00000000)
   {
     // Handle RAM; the masking intentionally discards bits (essentially creating
     // mirrors of memory).
@@ -226,7 +226,8 @@ static T ReadFromHardware(u32 em_address)
   }
 
   // Locked L1 technically doesn't have a fixed address, but games all use 0xE0000000.
-  if ((em_address >> 28) == 0xE && (em_address < (0xE0000000 + Memory::GetL1CacheSize())))
+  if (Memory::m_pL1Cache && (em_address >> 28) == 0xE &&
+      (em_address < (0xE0000000 + Memory::GetL1CacheSize())))
   {
     T value;
     std::memcpy(&value, &Memory::m_pL1Cache[em_address & 0x0FFFFFFF], sizeof(T));
@@ -238,7 +239,7 @@ static T ReadFromHardware(u32 em_address)
   if (Memory::m_pFakeVMEM && ((em_address & 0xFE000000) == 0x7E000000))
   {
     T value;
-    std::memcpy(&value, &Memory::m_pFakeVMEM[em_address & Memory::GetRamMask()], sizeof(T));
+    std::memcpy(&value, &Memory::m_pFakeVMEM[em_address & Memory::GetFakeVMemMask()], sizeof(T));
     return bswap(value);
   }
 
@@ -296,7 +297,7 @@ static void WriteToHardware(u32 em_address, const T data)
 
   // TODO: Make sure these are safe for unaligned addresses.
 
-  if ((em_address & 0xF8000000) == 0x00000000)
+  if (Memory::m_pRAM && (em_address & 0xF8000000) == 0x00000000)
   {
     // Handle RAM; the masking intentionally discards bits (essentially creating
     // mirrors of memory).
@@ -315,7 +316,8 @@ static void WriteToHardware(u32 em_address, const T data)
   }
 
   // Locked L1 technically doesn't have a fixed address, but games all use 0xE0000000.
-  if ((em_address >> 28 == 0xE) && (em_address < (0xE0000000 + Memory::GetL1CacheSize())))
+  if (Memory::m_pL1Cache && (em_address >> 28 == 0xE) &&
+      (em_address < (0xE0000000 + Memory::GetL1CacheSize())))
   {
     const T swapped_data = bswap(data);
     std::memcpy(&Memory::m_pL1Cache[em_address & 0x0FFFFFFF], &swapped_data, sizeof(T));
@@ -328,7 +330,8 @@ static void WriteToHardware(u32 em_address, const T data)
   if (Memory::m_pFakeVMEM && ((em_address & 0xFE000000) == 0x7E000000))
   {
     const T swapped_data = bswap(data);
-    std::memcpy(&Memory::m_pFakeVMEM[em_address & Memory::GetRamMask()], &swapped_data, sizeof(T));
+    std::memcpy(&Memory::m_pFakeVMEM[em_address & Memory::GetFakeVMemMask()], &swapped_data,
+                sizeof(T));
     return;
   }
 
@@ -425,6 +428,36 @@ u32 HostRead_Instruction(const u32 address)
   return ReadFromHardware<XCheckTLBFlag::OpcodeNoException, u32>(address);
 }
 
+TryReadResult<u32> HostTryReadInstruction(const u32 address, RequestedAddressSpace space)
+{
+  if (!HostIsInstructionRAMAddress(address, space))
+    return TryReadResult<u32>();
+
+  switch (space)
+  {
+  case RequestedAddressSpace::Effective:
+  {
+    const u32 value = ReadFromHardware<XCheckTLBFlag::OpcodeNoException, u32>(address);
+    return TryReadResult<u32>(!!MSR.DR, value);
+  }
+  case RequestedAddressSpace::Physical:
+  {
+    const u32 value = ReadFromHardware<XCheckTLBFlag::OpcodeNoException, u32, true>(address);
+    return TryReadResult<u32>(false, value);
+  }
+  case RequestedAddressSpace::Virtual:
+  {
+    if (!MSR.DR)
+      return TryReadResult<u32>();
+    const u32 value = ReadFromHardware<XCheckTLBFlag::OpcodeNoException, u32>(address);
+    return TryReadResult<u32>(true, value);
+  }
+  }
+
+  assert(0);
+  return TryReadResult<u32>();
+}
+
 static void Memcheck(u32 address, u32 var, bool write, size_t size)
 {
   if (PowerPC::memchecks.HasAny())
@@ -495,6 +528,73 @@ float Read_F32(const u32 address)
   const u32 integral = Read_U32(address);
 
   return Common::BitCast<float>(integral);
+}
+
+template <typename T>
+static TryReadResult<T> HostTryReadUX(const u32 address, RequestedAddressSpace space)
+{
+  if (!HostIsRAMAddress(address, space))
+    return TryReadResult<T>();
+
+  switch (space)
+  {
+  case RequestedAddressSpace::Effective:
+  {
+    T value = ReadFromHardware<XCheckTLBFlag::NoException, T>(address);
+    return TryReadResult<T>(!!MSR.DR, std::move(value));
+  }
+  case RequestedAddressSpace::Physical:
+  {
+    T value = ReadFromHardware<XCheckTLBFlag::NoException, T, true>(address);
+    return TryReadResult<T>(false, std::move(value));
+  }
+  case RequestedAddressSpace::Virtual:
+  {
+    if (!MSR.DR)
+      return TryReadResult<T>();
+    T value = ReadFromHardware<XCheckTLBFlag::NoException, T>(address);
+    return TryReadResult<T>(true, std::move(value));
+  }
+  }
+
+  assert(0);
+  return TryReadResult<T>();
+}
+
+TryReadResult<u8> HostTryReadU8(u32 address, RequestedAddressSpace space)
+{
+  return HostTryReadUX<u8>(address, space);
+}
+
+TryReadResult<u16> HostTryReadU16(u32 address, RequestedAddressSpace space)
+{
+  return HostTryReadUX<u16>(address, space);
+}
+
+TryReadResult<u32> HostTryReadU32(u32 address, RequestedAddressSpace space)
+{
+  return HostTryReadUX<u32>(address, space);
+}
+
+TryReadResult<u64> HostTryReadU64(u32 address, RequestedAddressSpace space)
+{
+  return HostTryReadUX<u64>(address, space);
+}
+
+TryReadResult<float> HostTryReadF32(u32 address, RequestedAddressSpace space)
+{
+  const auto result = HostTryReadUX<u32>(address, space);
+  if (!result)
+    return TryReadResult<float>();
+  return TryReadResult<float>(result.translated, Common::BitCast<float>(result.value));
+}
+
+TryReadResult<double> HostTryReadF64(u32 address, RequestedAddressSpace space)
+{
+  const auto result = HostTryReadUX<u64>(address, space);
+  if (!result)
+    return TryReadResult<double>();
+  return TryReadResult<double>(result.translated, Common::BitCast<double>(result.value));
 }
 
 u32 Read_U8_ZX(const u32 address)
@@ -621,6 +721,63 @@ void HostWrite_F64(const double var, const u32 address)
   HostWrite_U64(integral, address);
 }
 
+template <typename T>
+static TryWriteResult HostTryWriteUX(const T var, const u32 address, RequestedAddressSpace space)
+{
+  if (!HostIsRAMAddress(address, space))
+    return TryWriteResult();
+
+  switch (space)
+  {
+  case RequestedAddressSpace::Effective:
+    WriteToHardware<XCheckTLBFlag::NoException, T>(address, var);
+    return TryWriteResult(!!MSR.DR);
+  case RequestedAddressSpace::Physical:
+    WriteToHardware<XCheckTLBFlag::NoException, T, true>(address, var);
+    return TryWriteResult(false);
+  case RequestedAddressSpace::Virtual:
+    if (!MSR.DR)
+      return TryWriteResult();
+    WriteToHardware<XCheckTLBFlag::NoException, T>(address, var);
+    return TryWriteResult(true);
+  }
+
+  assert(0);
+  return TryWriteResult();
+}
+
+TryWriteResult HostTryWriteU8(const u8 var, const u32 address, RequestedAddressSpace space)
+{
+  return HostTryWriteUX<u8>(var, address, space);
+}
+
+TryWriteResult HostTryWriteU16(const u16 var, const u32 address, RequestedAddressSpace space)
+{
+  return HostTryWriteUX<u16>(var, address, space);
+}
+
+TryWriteResult HostTryWriteU32(const u32 var, const u32 address, RequestedAddressSpace space)
+{
+  return HostTryWriteUX<u32>(var, address, space);
+}
+
+TryWriteResult HostTryWriteU64(const u64 var, const u32 address, RequestedAddressSpace space)
+{
+  return HostTryWriteUX<u64>(var, address, space);
+}
+
+TryWriteResult HostTryWriteF32(const float var, const u32 address, RequestedAddressSpace space)
+{
+  const u32 integral = Common::BitCast<u32>(var);
+  return HostTryWriteU32(integral, address, space);
+}
+
+TryWriteResult HostTryWriteF64(const double var, const u32 address, RequestedAddressSpace space)
+{
+  const u64 integral = Common::BitCast<u64>(var);
+  return HostTryWriteU64(integral, address, space);
+}
+
 std::string HostGetString(u32 address, size_t size)
 {
   std::string s;
@@ -635,6 +792,27 @@ std::string HostGetString(u32 address, size_t size)
     ++address;
   } while (size == 0 || s.length() < size);
   return s;
+}
+
+TryReadResult<std::string> HostTryReadString(u32 address, size_t size, RequestedAddressSpace space)
+{
+  auto c = HostTryReadU8(address, space);
+  if (!c)
+    return TryReadResult<std::string>();
+  if (c.value == 0)
+    return TryReadResult<std::string>(c.translated, "");
+
+  std::string s;
+  s += static_cast<char>(c.value);
+  while (size == 0 || s.length() < size)
+  {
+    ++address;
+    const auto res = HostTryReadU8(address, space);
+    if (!res || res.value == 0)
+      break;
+    s += static_cast<char>(res.value);
+  }
+  return TryReadResult<std::string>(c.translated, std::move(s));
 }
 
 bool IsOptimizableRAMAddress(const u32 address)
@@ -665,27 +843,65 @@ static bool IsRAMAddress(u32 address, bool translate)
   }
 
   u32 segment = address >> 28;
-  if (segment == 0x0 && (address & 0x0FFFFFFF) < Memory::GetRamSizeReal())
+  if (Memory::m_pRAM && segment == 0x0 && (address & 0x0FFFFFFF) < Memory::GetRamSizeReal())
+  {
     return true;
+  }
   else if (Memory::m_pEXRAM && segment == 0x1 &&
            (address & 0x0FFFFFFF) < Memory::GetExRamSizeReal())
+  {
     return true;
+  }
   else if (Memory::m_pFakeVMEM && ((address & 0xFE000000) == 0x7E000000))
+  {
     return true;
-  else if (segment == 0xE && (address < (0xE0000000 + Memory::GetL1CacheSize())))
+  }
+  else if (Memory::m_pL1Cache && segment == 0xE &&
+           (address < (0xE0000000 + Memory::GetL1CacheSize())))
+  {
     return true;
+  }
   return false;
 }
 
-bool HostIsRAMAddress(u32 address)
+bool HostIsRAMAddress(u32 address, RequestedAddressSpace space)
 {
-  return IsRAMAddress<XCheckTLBFlag::NoException>(address, MSR.DR);
+  switch (space)
+  {
+  case RequestedAddressSpace::Effective:
+    return IsRAMAddress<XCheckTLBFlag::NoException>(address, MSR.DR);
+  case RequestedAddressSpace::Physical:
+    return IsRAMAddress<XCheckTLBFlag::NoException>(address, false);
+  case RequestedAddressSpace::Virtual:
+    if (!MSR.DR)
+      return false;
+    return IsRAMAddress<XCheckTLBFlag::NoException>(address, true);
+  }
+
+  assert(0);
+  return false;
 }
 
-bool HostIsInstructionRAMAddress(u32 address)
+bool HostIsInstructionRAMAddress(u32 address, RequestedAddressSpace space)
 {
   // Instructions are always 32bit aligned.
-  return !(address & 3) && IsRAMAddress<XCheckTLBFlag::OpcodeNoException>(address, MSR.IR);
+  if (address & 3)
+    return false;
+
+  switch (space)
+  {
+  case RequestedAddressSpace::Effective:
+    return IsRAMAddress<XCheckTLBFlag::OpcodeNoException>(address, MSR.IR);
+  case RequestedAddressSpace::Physical:
+    return IsRAMAddress<XCheckTLBFlag::OpcodeNoException>(address, false);
+  case RequestedAddressSpace::Virtual:
+    if (!MSR.IR)
+      return false;
+    return IsRAMAddress<XCheckTLBFlag::OpcodeNoException>(address, true);
+  }
+
+  assert(0);
+  return false;
 }
 
 void DMA_LCToMemory(const u32 mem_address, const u32 cache_address, const u32 num_blocks)
@@ -969,14 +1185,16 @@ void SDRUpdated()
 {
   u32 htabmask = SDR1_HTABMASK(PowerPC::ppcState.spr[SPR_SDR]);
   if (!Common::IsValidLowMask(htabmask))
-  {
-    return;
-  }
+    WARN_LOG_FMT(POWERPC, "Invalid HTABMASK: 0b{:032b}", htabmask);
+
+  // While 6xx_pem.pdf §7.6.1.1 mentions that the number of trailing zeros in HTABORG
+  // must be equal to the number of trailing ones in the mask (i.e. HTABORG must be
+  // properly aligned), this is actually not a hard requirement. Real hardware will just OR
+  // the base address anyway. Ignoring SDR changes would lead to incorrect emulation.
   u32 htaborg = SDR1_HTABORG(PowerPC::ppcState.spr[SPR_SDR]);
   if (htaborg & htabmask)
-  {
-    return;
-  }
+    WARN_LOG_FMT(POWERPC, "Invalid HTABORG: htaborg=0x{:08x} htabmask=0x{:08x}", htaborg, htabmask);
+
   PowerPC::ppcState.pagetable_base = htaborg << 16;
   PowerPC::ppcState.pagetable_hashmask = ((htabmask << 10) | 0x3ff);
 }
@@ -1100,7 +1318,7 @@ static TranslateAddressResult TranslatePageAddress(const u32 address, const XChe
 
   // hash function no 1 "xor" .360
   u32 hash = (VSID ^ page_index);
-  u32 pte1 = Common::swap32((VSID << 7) | api | PTE1_V);
+  u32 pte1 = (VSID << 7) | api | PTE1_V;
 
   for (int hash_func = 0; hash_func < 2; hash_func++)
   {
@@ -1108,7 +1326,7 @@ static TranslateAddressResult TranslatePageAddress(const u32 address, const XChe
     if (hash_func == 1)
     {
       hash = ~hash;
-      pte1 |= PTE1_H << 24;
+      pte1 |= PTE1_H;
     }
 
     u32 pteg_addr =
@@ -1116,7 +1334,7 @@ static TranslateAddressResult TranslatePageAddress(const u32 address, const XChe
 
     for (int i = 0; i < 8; i++, pteg_addr += 8)
     {
-      u32 pteg = Common::swap32(Memory::Read_U32(pteg_addr));
+      const u32 pteg = Memory::Read_U32(pteg_addr);
 
       if (pte1 == pteg)
       {

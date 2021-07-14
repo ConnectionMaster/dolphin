@@ -1,6 +1,5 @@
 // Copyright 2017 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "DolphinQt/HotkeyScheduler.h"
 
@@ -25,7 +24,9 @@
 #include "Core/HotkeyManager.h"
 #include "Core/IOS/IOS.h"
 #include "Core/IOS/USB/Bluetooth/BTBase.h"
+#include "Core/IOS/USB/Bluetooth/BTReal.h"
 #include "Core/State.h"
+#include "Core/WiiUtils.h"
 
 #include "DolphinQt/Settings.h"
 
@@ -139,10 +140,14 @@ void HotkeyScheduler::Run()
 
   while (!m_stop_requested.IsSet())
   {
-    Common::SleepCurrentThread(1000 / 60);
+    Common::SleepCurrentThread(5);
 
-    if (Core::GetState() == Core::State::Uninitialized || Core::GetState() == Core::State::Paused)
-      g_controller_interface.UpdateInput();
+    g_controller_interface.SetCurrentInputChannel(ciface::InputChannel::FreeLook);
+    g_controller_interface.UpdateInput();
+    FreeLook::UpdateInput();
+
+    g_controller_interface.SetCurrentInputChannel(ciface::InputChannel::Host);
+    g_controller_interface.UpdateInput();
 
     if (!HotkeyManagerEmu::IsEnabled())
       continue;
@@ -207,6 +212,10 @@ void HotkeyScheduler::Run()
       if (IsHotkey(HK_EXIT))
         emit ExitHotkey();
 
+      // Unlock Cursor
+      if (IsHotkey(HK_UNLOCK_CURSOR))
+        emit UnlockCursor();
+
       auto& settings = Settings::Instance();
 
       // Toggle Chat
@@ -227,15 +236,8 @@ void HotkeyScheduler::Run()
         emit ToggleReadOnlyMode();
 
       // Wiimote
-      if (SConfig::GetInstance().m_bt_passthrough_enabled)
-      {
-        const auto ios = IOS::HLE::GetIOS();
-        auto device = ios ? ios->GetDeviceByName("/dev/usb/oh1/57e/305") : nullptr;
-
-        if (device != nullptr)
-          std::static_pointer_cast<IOS::HLE::Device::BluetoothBase>(device)->UpdateSyncButtonState(
-              IsHotkey(HK_TRIGGER_SYNC_BUTTON, true));
-      }
+      if (auto bt = WiiUtils::GetBluetoothRealDevice())
+        bt->UpdateSyncButtonState(IsHotkey(HK_TRIGGER_SYNC_BUTTON, true));
 
       if (SConfig::GetInstance().bEnableDebugging)
       {
@@ -545,8 +547,6 @@ void HotkeyScheduler::Run()
       Config::SetCurrent(Config::FREE_LOOK_ENABLED, new_value);
       OSD::AddMessage(StringFromFormat("Free Look: %s", new_value ? "Enabled" : "Disabled"));
     }
-
-    FreeLook::UpdateInput();
 
     // Savestates
     for (u32 i = 0; i < State::NUM_STATES; i++)

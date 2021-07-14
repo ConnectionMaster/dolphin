@@ -1,6 +1,5 @@
 // Copyright 2008 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "VideoCommon/VertexLoader_TextCoord.h"
 
@@ -191,14 +190,17 @@ constexpr u32 s_table_read_tex_coord_vertex_size[4][8][2] = {
 };
 }  // Anonymous namespace
 
-u32 VertexLoader_TextCoord::GetSize(u64 type, u32 format, u32 elements)
+u32 VertexLoader_TextCoord::GetSize(VertexComponentFormat type, ComponentFormat format,
+                                    TexComponentCount elements)
 {
-  return s_table_read_tex_coord_vertex_size[type][format][elements];
+  return s_table_read_tex_coord_vertex_size[u32(type)][u32(format)][u32(elements)];
 }
 
-TPipelineFunction VertexLoader_TextCoord::GetFunction(u64 type, u32 format, u32 elements)
+TPipelineFunction VertexLoader_TextCoord::GetFunction(VertexComponentFormat type,
+                                                      ComponentFormat format,
+                                                      TexComponentCount elements)
 {
-  return s_table_read_tex_coord[type][format][elements];
+  return s_table_read_tex_coord[u32(type)][u32(format)][u32(elements)];
 }
 
 TPipelineFunction VertexLoader_TextCoord::GetDummyFunction()

@@ -1,6 +1,5 @@
 // Copyright 2015 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #ifdef _WIN32
 #include <string>
@@ -21,10 +20,10 @@
 #include "Common/MsgHandler.h"
 #include "Common/ScopeGuard.h"
 
-#include "Core/Analytics.h"
 #include "Core/Boot/Boot.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
+#include "Core/DolphinAnalytics.h"
 
 #include "DolphinQt/Host.h"
 #include "DolphinQt/MainWindow.h"
@@ -119,6 +118,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     freopen("CONOUT$", "w", stderr);
   }
 #endif
+
+  Host::GetInstance()->DeclareAsHostThread();
 
 #ifdef __APPLE__
   // On macOS, a command line option matching the format "-psn_X_XXXXXX" is passed when
@@ -246,6 +247,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     DolphinAnalytics::Instance().ReportDolphinStart("qt");
 
     MainWindow win{std::move(boot), static_cast<const char*>(options.get("movie"))};
+    Settings::Instance().SetCurrentUserStyle(Settings::Instance().GetCurrentUserStyle());
     if (options.is_set("debugger"))
       Settings::Instance().SetDebugModeEnabled(true);
     win.Show();

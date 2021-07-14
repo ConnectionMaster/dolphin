@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 package org.dolphinemu.dolphinemu.dialogs;
 
 import android.app.Dialog;
@@ -53,9 +55,13 @@ public class GamePropertiesDialog extends DialogFragment
     final String path = requireArguments().getString(ARG_PATH);
     final String gameId = requireArguments().getString(ARG_GAMEID);
     final int revision = requireArguments().getInt(ARG_REVISION);
-    final boolean isWii = requireArguments().getInt(ARG_PLATFORM) != Platform.GAMECUBE.toInt();
+    final int platform = requireArguments().getInt(ARG_PLATFORM);
     final boolean shouldAllowConversion =
             requireArguments().getBoolean(ARG_SHOULD_ALLOW_CONVERSION);
+
+    final boolean isDisc = platform == Platform.GAMECUBE.toInt() ||
+            platform == Platform.WII.toInt();
+    final boolean isWii = platform != Platform.GAMECUBE.toInt();
 
     AlertDialogItemsBuilder itemsBuilder = new AlertDialogItemsBuilder(requireContext());
 
@@ -69,15 +75,18 @@ public class GamePropertiesDialog extends DialogFragment
               ConvertActivity.launch(getContext(), path));
     }
 
-    itemsBuilder.add(R.string.properties_set_default_iso, (dialog, i) ->
+    if (isDisc)
     {
-      try (Settings settings = new Settings())
+      itemsBuilder.add(R.string.properties_set_default_iso, (dialog, i) ->
       {
-        settings.loadSettings();
-        StringSetting.MAIN_DEFAULT_ISO.setString(settings, path);
-        settings.saveSettings(null, getContext());
-      }
-    });
+        try (Settings settings = new Settings())
+        {
+          settings.loadSettings();
+          StringSetting.MAIN_DEFAULT_ISO.setString(settings, path);
+          settings.saveSettings(null, getContext());
+        }
+      });
+    }
 
     itemsBuilder.add(R.string.properties_edit_game_settings, (dialog, i) ->
             SettingsActivity.launch(getContext(), MenuTag.SETTINGS, gameId, revision, isWii));
@@ -89,7 +98,7 @@ public class GamePropertiesDialog extends DialogFragment
             R.style.DolphinDialogBase);
     itemsBuilder.applyToBuilder(builder);
     builder.setTitle(requireContext()
-            .getString(R.string.preferences_game_properties) + ": " + gameId);
+            .getString(R.string.preferences_game_properties_with_game_id, gameId));
     return builder.create();
   }
 
@@ -106,18 +115,20 @@ public class GamePropertiesDialog extends DialogFragment
     {
       if (gameSettingsFile.delete() || hadGameProfiles)
       {
-        Toast.makeText(getContext(), "Cleared settings for " + gameId, Toast.LENGTH_SHORT)
-                .show();
+        Toast.makeText(getContext(),
+                getResources().getString(R.string.properties_clear_success, gameId),
+                Toast.LENGTH_SHORT).show();
       }
       else
       {
-        Toast.makeText(getContext(), "Unable to clear settings for " + gameId,
+        Toast.makeText(getContext(),
+                getResources().getString(R.string.properties_clear_failure, gameId),
                 Toast.LENGTH_SHORT).show();
       }
     }
     else
     {
-      Toast.makeText(getContext(), "No game settings to delete", Toast.LENGTH_SHORT).show();
+      Toast.makeText(getContext(), R.string.properties_clear_missing, Toast.LENGTH_SHORT).show();
     }
   }
 

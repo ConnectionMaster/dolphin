@@ -1,6 +1,5 @@
 // Copyright 2013 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
@@ -50,9 +49,8 @@ public:
   bool AbortMD5();
   void SendChatMessage(const std::string& msg);
 
-  void SetNetSettings(const NetSettings& settings);
-
   bool DoAllPlayersHaveIPLDump() const;
+  bool DoAllPlayersHaveHardwareFMA() const;
   bool StartGame();
   bool RequestStartGame();
   void AbortGameStart();
@@ -84,6 +82,7 @@ private:
     std::string revision;
     SyncIdentifierComparison game_status;
     bool has_ipl_dump;
+    bool has_hardware_fma;
 
     ENetPeer* socket;
     u32 ping;
@@ -117,11 +116,10 @@ private:
     std::string title;
   };
 
+  bool SetupNetSettings();
   bool SyncSaveData();
   bool SyncCodes();
   void CheckSyncAndStartGame();
-  bool CompressFileIntoPacket(const std::string& file_path, sf::Packet& packet);
-  bool CompressBufferIntoPacket(const std::vector<u8>& in_buffer, sf::Packet& packet);
 
   u64 GetInitialNetPlayRTC() const;
 
@@ -134,7 +132,7 @@ private:
 
   void OnTraversalStateChanged() override;
   void OnConnectReady(ENetAddress) override {}
-  void OnConnectFailed(u8) override {}
+  void OnConnectFailed(TraversalConnectFailedReason) override {}
   void UpdatePadMapping();
   void UpdateWiimoteMapping();
   std::vector<std::pair<std::string, std::string>> GetInterfaceListInternal() const;

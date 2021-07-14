@@ -1,6 +1,5 @@
 // Copyright 2015 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "Core/HW/DVD/DVDThread.h"
 
@@ -347,7 +346,7 @@ static void FinishRead(u64 id, s64 cycles_late)
     PanicAlertFmtT("The disc could not be read (at {0:#x} - {1:#x}).", request.dvd_offset,
                    request.dvd_offset + request.length);
 
-    DVDInterface::SetDriveError(DVDInterface::DriveError::BlockOOB);
+    DVDInterface::SetDriveError(DVDInterface::DriveError::ReadError);
     interrupt = DVDInterface::DIInterruptType::DEINT;
   }
   else

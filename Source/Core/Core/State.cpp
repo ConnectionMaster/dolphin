@@ -1,6 +1,5 @@
 // Copyright 2008 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "Core/State.h"
 
@@ -17,8 +16,8 @@
 #include "Common/ChunkFile.h"
 #include "Common/CommonTypes.h"
 #include "Common/Event.h"
-#include "Common/File.h"
 #include "Common/FileUtil.h"
+#include "Common/IOFile.h"
 #include "Common/MsgHandler.h"
 #include "Common/ScopeGuard.h"
 #include "Common/Thread.h"
@@ -74,7 +73,7 @@ static Common::Event g_compressAndDumpStateSyncEvent;
 static std::thread g_save_thread;
 
 // Don't forget to increase this after doing changes on the savestate system
-constexpr u32 STATE_VERSION = 127;  // Last changed in PR 9300
+constexpr u32 STATE_VERSION = 132;  // Last changed in PR 9532
 
 // Maps savestate versions to Dolphin versions.
 // Versions after 42 don't need to be added to this list,
@@ -455,14 +454,7 @@ bool ReadHeader(const std::string& filename, StateHeader& header)
 {
   Flush();
   File::IOFile f(filename, "rb");
-  if (!f)
-  {
-    Core::DisplayMessage("State not found", 2000);
-    return false;
-  }
-
-  f.ReadArray(&header, 1);
-  return true;
+  return f.ReadArray(&header, 1);
 }
 
 std::string GetInfoStringOfSlot(int slot, bool translate)
@@ -493,14 +485,13 @@ static void LoadFileStateData(const std::string& filename, std::vector<u8>& ret_
 {
   Flush();
   File::IOFile f(filename, "rb");
-  if (!f)
+
+  StateHeader header;
+  if (!f.ReadArray(&header, 1))
   {
     Core::DisplayMessage("State not found", 2000);
     return;
   }
-
-  StateHeader header;
-  f.ReadArray(&header, 1);
 
   if (strncmp(SConfig::GetInstance().GetGameID().c_str(), header.gameID, 6))
   {

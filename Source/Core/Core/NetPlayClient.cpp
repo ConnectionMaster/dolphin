@@ -1,11 +1,9 @@
 // Copyright 2010 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "Core/NetPlayClient.h"
 
 #include <algorithm>
-#include <cassert>
 #include <cstddef>
 #include <cstring>
 #include <fstream>
@@ -17,14 +15,12 @@
 #include <vector>
 
 #include <fmt/format.h>
-#include <lzo/lzo1x.h>
 #include <mbedtls/md5.h>
 
 #include "Common/Assert.h"
 #include "Common/CommonPaths.h"
 #include "Common/CommonTypes.h"
 #include "Common/ENetUtil.h"
-#include "Common/File.h"
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/MD5.h"
@@ -35,11 +31,14 @@
 #include "Common/StringUtil.h"
 #include "Common/Timer.h"
 #include "Common/Version.h"
+
 #include "Core/ActionReplay.h"
 #include "Core/Config/NetplaySettings.h"
+#include "Core/Config/SessionSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/GeckoCode.h"
 #include "Core/HW/EXI/EXI_DeviceIPL.h"
+#include "Core/HW/GCMemcard/GCMemcard.h"
 #include "Core/HW/SI/SI.h"
 #include "Core/HW/SI/SI_Device.h"
 #include "Core/HW/SI/SI_DeviceGCController.h"
@@ -53,8 +52,10 @@
 #include "Core/IOS/USB/Bluetooth/BTEmu.h"
 #include "Core/IOS/Uids.h"
 #include "Core/Movie.h"
+#include "Core/NetPlayCommon.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/SyncIdentifier.h"
+
 #include "InputCommon/ControllerEmu/ControlGroup/Attachments.h"
 #include "InputCommon/GCAdapter.h"
 #include "InputCommon/InputConfig.h"
@@ -174,7 +175,7 @@ NetPlayClient::NetPlayClient(const std::string& address, const u16 port, NetPlay
     m_traversal_client = g_TraversalClient.get();
 
     // If we were disconnected in the background, reconnect.
-    if (m_traversal_client->GetState() == TraversalClient::Failure)
+    if (m_traversal_client->HasFailed())
       m_traversal_client->ReconnectToServer();
     m_traversal_client->m_Client = this;
     m_host_spec = address;
@@ -610,10 +611,11 @@ unsigned int NetPlayClient::OnData(sf::Packet& packet)
     game_status_packet << static_cast<u32>(result);
     Send(game_status_packet);
 
-    sf::Packet ipl_status_packet;
-    ipl_status_packet << static_cast<MessageId>(NP_MSG_IPL_STATUS);
-    ipl_status_packet << ExpansionInterface::CEXIIPL::HasIPLDump();
-    Send(ipl_status_packet);
+    sf::Packet client_capabilities_packet;
+    client_capabilities_packet << static_cast<MessageId>(NP_MSG_CLIENT_CAPABILITIES);
+    client_capabilities_packet << ExpansionInterface::CEXIIPL::HasIPLDump();
+    client_capabilities_packet << Config::Get(Config::SESSION_USE_FMA);
+    Send(client_capabilities_packet);
   }
   break;
 
@@ -654,11 +656,20 @@ unsigned int NetPlayClient::OnData(sf::Packet& packet)
       packet >> m_net_settings.m_EnableCheats;
       packet >> m_net_settings.m_SelectedLanguage;
       packet >> m_net_settings.m_OverrideRegionSettings;
-      packet >> m_net_settings.m_ProgressiveScan;
-      packet >> m_net_settings.m_PAL60;
       packet >> m_net_settings.m_DSPEnableJIT;
       packet >> m_net_settings.m_DSPHLE;
       packet >> m_net_settings.m_WriteToMemcard;
+      packet >> m_net_settings.m_RAMOverrideEnable;
+      packet >> m_net_settings.m_Mem1Size;
+      packet >> m_net_settings.m_Mem2Size;
+
+      {
+        std::underlying_type_t<DiscIO::Region> tmp;
+        packet >> tmp;
+        m_net_settings.m_FallbackRegion = static_cast<DiscIO::Region>(tmp);
+      }
+
+      packet >> m_net_settings.m_AllowSDWrites;
       packet >> m_net_settings.m_CopyWiiSave;
       packet >> m_net_settings.m_OCEnable;
       packet >> m_net_settings.m_OCFactor;
@@ -669,6 +680,9 @@ unsigned int NetPlayClient::OnData(sf::Packet& packet)
         packet >> tmp;
         device = static_cast<ExpansionInterface::TEXIDevices>(tmp);
       }
+
+      for (u32& value : m_net_settings.m_SYSCONFSettings)
+        packet >> value;
 
       packet >> m_net_settings.m_EFBAccessEnable;
       packet >> m_net_settings.m_BBoxEnable;
@@ -682,6 +696,7 @@ unsigned int NetPlayClient::OnData(sf::Packet& packet)
       packet >> m_net_settings.m_PerfQueriesEnable;
       packet >> m_net_settings.m_FPRF;
       packet >> m_net_settings.m_AccurateNaNs;
+      packet >> m_net_settings.m_DisableICache;
       packet >> m_net_settings.m_SyncOnSkipIdle;
       packet >> m_net_settings.m_SyncGPU;
       packet >> m_net_settings.m_SyncGpuMaxDistance;
@@ -723,6 +738,7 @@ unsigned int NetPlayClient::OnData(sf::Packet& packet)
         packet >> extension;
 
       packet >> m_net_settings.m_GolfMode;
+      packet >> m_net_settings.m_UseFMA;
 
       m_net_settings.m_IsHosting = m_local_player->IsHost();
       m_net_settings.m_HostInputAuthority = m_host_input_authority;
@@ -844,11 +860,25 @@ unsigned int NetPlayClient::OnData(sf::Packet& packet)
 
       bool is_slot_a;
       std::string region;
-      bool mc251;
-      packet >> is_slot_a >> region >> mc251;
+      int size_override;
+      packet >> is_slot_a >> region >> size_override;
+
+      // This check is mainly intended to filter out characters which have special meanings in paths
+      if (region != JAP_DIR && region != USA_DIR && region != EUR_DIR)
+      {
+        SyncSaveDataResponse(false);
+        return 0;
+      }
+
+      std::string size_suffix;
+      if (size_override >= 0 && size_override <= 4)
+      {
+        size_suffix = fmt::format(
+            ".{}", Memcard::MbitToFreeBlocks(Memcard::MBIT_SIZE_MEMORY_CARD_59 << size_override));
+      }
 
       const std::string path = File::GetUserPath(D_GCUSER_IDX) + GC_MEMCARD_NETPLAY +
-                               (is_slot_a ? "A." : "B.") + region + (mc251 ? ".251" : "") + ".raw";
+                               (is_slot_a ? "A." : "B.") + region + size_suffix + ".raw";
       if (File::Exists(path) && !File::Delete(path))
       {
         PanicAlertFmtT("Failed to delete NetPlay memory card. Verify your write permissions.");
@@ -886,7 +916,8 @@ unsigned int NetPlayClient::OnData(sf::Packet& packet)
         std::string file_name;
         packet >> file_name;
 
-        if (!DecompressPacketIntoFile(packet, path + DIR_SEP + file_name))
+        if (!Common::IsFileNameSafe(file_name) ||
+            !DecompressPacketIntoFile(packet, path + DIR_SEP + file_name))
         {
           SyncSaveDataResponse(false);
           return 0;
@@ -1603,92 +1634,6 @@ void NetPlayClient::SyncCodeResponse(const bool success)
   }
 }
 
-bool NetPlayClient::DecompressPacketIntoFile(sf::Packet& packet, const std::string& file_path)
-{
-  u64 file_size = Common::PacketReadU64(packet);
-
-  if (file_size == 0)
-    return true;
-
-  File::IOFile file(file_path, "wb");
-  if (!file)
-  {
-    PanicAlertFmtT("Failed to open file \"{0}\". Verify your write permissions.", file_path);
-    return false;
-  }
-
-  std::vector<u8> in_buffer(NETPLAY_LZO_OUT_LEN);
-  std::vector<u8> out_buffer(NETPLAY_LZO_IN_LEN);
-
-  while (true)
-  {
-    u32 cur_len = 0;       // number of bytes to read
-    lzo_uint new_len = 0;  // number of bytes to write
-
-    packet >> cur_len;
-    if (!cur_len)
-      break;  // We reached the end of the data stream
-
-    for (size_t j = 0; j < cur_len; j++)
-    {
-      packet >> in_buffer[j];
-    }
-
-    if (lzo1x_decompress(in_buffer.data(), cur_len, out_buffer.data(), &new_len, nullptr) !=
-        LZO_E_OK)
-    {
-      PanicAlertFmtT("Internal LZO Error - decompression failed");
-      return false;
-    }
-
-    if (!file.WriteBytes(out_buffer.data(), new_len))
-    {
-      PanicAlertFmtT("Error writing file: {0}", file_path);
-      return false;
-    }
-  }
-
-  return true;
-}
-
-std::optional<std::vector<u8>> NetPlayClient::DecompressPacketIntoBuffer(sf::Packet& packet)
-{
-  u64 size = Common::PacketReadU64(packet);
-
-  std::vector<u8> out_buffer(size);
-
-  if (size == 0)
-    return out_buffer;
-
-  std::vector<u8> in_buffer(NETPLAY_LZO_OUT_LEN);
-
-  lzo_uint i = 0;
-  while (true)
-  {
-    u32 cur_len = 0;       // number of bytes to read
-    lzo_uint new_len = 0;  // number of bytes to write
-
-    packet >> cur_len;
-    if (!cur_len)
-      break;  // We reached the end of the data stream
-
-    for (size_t j = 0; j < cur_len; j++)
-    {
-      packet >> in_buffer[j];
-    }
-
-    if (lzo1x_decompress(in_buffer.data(), cur_len, &out_buffer[i], &new_len, nullptr) != LZO_E_OK)
-    {
-      PanicAlertFmtT("Internal LZO Error - decompression failed");
-      return {};
-    }
-
-    i += new_len;
-  }
-
-  return out_buffer;
-}
-
 // called from ---GUI--- thread
 bool NetPlayClient::ChangeGame(const std::string&)
 {
@@ -1755,12 +1700,13 @@ void NetPlayClient::OnTraversalStateChanged()
   const TraversalClient::State state = m_traversal_client->GetState();
 
   if (m_connection_state == ConnectionState::WaitingForTraversalClientConnection &&
-      state == TraversalClient::Connected)
+      state == TraversalClient::State::Connected)
   {
     m_connection_state = ConnectionState::WaitingForTraversalClientConnectReady;
     m_traversal_client->ConnectToClient(m_host_spec);
   }
-  else if (m_connection_state != ConnectionState::Failure && state == TraversalClient::Failure)
+  else if (m_connection_state != ConnectionState::Failure &&
+           state == TraversalClient::State::Failure)
   {
     Disconnect();
     m_dialog->OnTraversalError(m_traversal_client->GetFailureReason());
@@ -1779,19 +1725,19 @@ void NetPlayClient::OnConnectReady(ENetAddress addr)
 }
 
 // called from ---NETPLAY--- thread
-void NetPlayClient::OnConnectFailed(u8 reason)
+void NetPlayClient::OnConnectFailed(TraversalConnectFailedReason reason)
 {
   m_connecting = false;
   m_connection_state = ConnectionState::Failure;
   switch (reason)
   {
-  case TraversalConnectFailedClientDidntRespond:
+  case TraversalConnectFailedReason::ClientDidntRespond:
     PanicAlertFmtT("Traversal server timed out connecting to the host");
     break;
-  case TraversalConnectFailedClientFailure:
+  case TraversalConnectFailedReason::ClientFailure:
     PanicAlertFmtT("Server rejected traversal attempt");
     break;
-  case TraversalConnectFailedNoSuchClient:
+  case TraversalConnectFailedReason::NoSuchClient:
     PanicAlertFmtT("Invalid host");
     break;
   default:
@@ -2015,7 +1961,7 @@ bool NetPlayClient::WiimoteUpdate(int _number, u8* data, const std::size_t size,
     }
   }
 
-  assert(nw.data.size() == size);
+  ASSERT(nw.data.size() == size);
   std::copy(nw.data.begin(), nw.data.end(), data);
   return true;
 }

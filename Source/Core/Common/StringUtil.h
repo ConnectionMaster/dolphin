@@ -1,6 +1,5 @@
 // Copyright 2008 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
@@ -51,6 +50,8 @@ std::string_view StripSpaces(std::string_view s);
 std::string_view StripQuotes(std::string_view s);
 
 std::string ReplaceAll(std::string result, std::string_view src, std::string_view dest);
+
+void ReplaceBreaksWithSpaces(std::string& str);
 
 bool TryParse(const std::string& str, bool* output);
 
@@ -240,3 +241,5 @@ inline bool IsPrintableCharacter(char c)
 #ifdef _WIN32
 std::vector<std::string> CommandLineToUtf8Argv(const wchar_t* command_line);
 #endif
+
+std::string GetEscapedHtml(std::string html);

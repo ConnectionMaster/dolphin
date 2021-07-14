@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 package org.dolphinemu.dolphinemu.features.settings.ui;
 
 import android.app.ProgressDialog;
@@ -19,11 +21,8 @@ import androidx.lifecycle.ViewModelProvider;
 
 import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.R;
-import org.dolphinemu.dolphinemu.ui.main.MainActivity;
 import org.dolphinemu.dolphinemu.ui.main.MainPresenter;
-import org.dolphinemu.dolphinemu.ui.main.TvMainActivity;
 import org.dolphinemu.dolphinemu.utils.FileBrowserHelper;
-import org.dolphinemu.dolphinemu.utils.TvUtil;
 
 import java.util.Set;
 
@@ -62,14 +61,7 @@ public final class SettingsActivity extends AppCompatActivity implements Setting
   {
     super.onCreate(savedInstanceState);
 
-    if (TvUtil.isLeanback(getApplicationContext()))
-    {
-      TvMainActivity.skipRescanningLibrary();
-    }
-    else
-    {
-      MainActivity.skipRescanningLibrary();
-    }
+    MainPresenter.skipRescanningLibrary();
 
     setContentView(R.layout.activity_settings);
 
@@ -179,7 +171,7 @@ public final class SettingsActivity extends AppCompatActivity implements Setting
     super.onActivityResult(requestCode, resultCode, result);
 
     // If the user picked a file, as opposed to just backing out.
-    if (resultCode == MainActivity.RESULT_OK)
+    if (resultCode == RESULT_OK)
     {
       if (requestCode != MainPresenter.REQUEST_DIRECTORY)
       {

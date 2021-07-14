@@ -1,16 +1,15 @@
 // Copyright 2015 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 // Null Backend Documentation
 
 // This backend tries not to do anything in the backend,
 // but everything in VideoCommon.
 
+#include "VideoBackends/Null/NullRender.h"
+#include "VideoBackends/Null/NullVertexManager.h"
 #include "VideoBackends/Null/PerfQuery.h"
-#include "VideoBackends/Null/Render.h"
 #include "VideoBackends/Null/TextureCache.h"
-#include "VideoBackends/Null/VertexManager.h"
 #include "VideoBackends/Null/VideoBackend.h"
 
 #include "Common/Common.h"

@@ -1,6 +1,5 @@
 // Copyright 2008 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "Core/HW/DVD/DVDInterface.h"
 
@@ -18,10 +17,10 @@
 #include "Common/Config/Config.h"
 #include "Common/Logging/Log.h"
 
-#include "Core/Analytics.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/CoreTiming.h"
+#include "Core/DolphinAnalytics.h"
 #include "Core/HW/AudioInterface.h"
 #include "Core/HW/DVD/DVDMath.h"
 #include "Core/HW/DVD/DVDThread.h"
@@ -36,6 +35,7 @@
 #include "Core/Movie.h"
 
 #include "DiscIO/Blob.h"
+#include "DiscIO/DiscUtils.h"
 #include "DiscIO/Enums.h"
 #include "DiscIO/VolumeDisc.h"
 #include "DiscIO/VolumeWii.h"
@@ -164,6 +164,7 @@ static u8 s_dtk_buffer_length = 0;  // TODO: figure out how this affects the reg
 // Disc drive state
 static DriveState s_drive_state;
 static DriveError s_error_code;
+static u64 s_disc_end_offset;
 
 // Disc drive timing
 static u64 s_read_buffer_start_time;
@@ -425,6 +426,33 @@ void Shutdown()
   DVDThread::Stop();
 }
 
+static u64 GetDiscEndOffset(const DiscIO::VolumeDisc& disc)
+{
+  u64 size = disc.GetSize();
+
+  if (disc.IsSizeAccurate())
+  {
+    if (size == DiscIO::MINI_DVD_SIZE)
+      return DiscIO::MINI_DVD_SIZE;
+  }
+  else
+  {
+    size = DiscIO::GetBiggestReferencedOffset(disc);
+  }
+
+  const bool should_be_mini_dvd =
+      disc.GetVolumeType() == DiscIO::Platform::GameCubeDisc || disc.IsDatelDisc();
+
+  // We always return standard DVD sizes here, not DVD-R sizes.
+  // RVT-R (devkit) consoles can't read the extra megabytes there are on RVT-R (DVD-R) discs.
+  if (should_be_mini_dvd && size <= DiscIO::MINI_DVD_SIZE)
+    return DiscIO::MINI_DVD_SIZE;
+  else if (size <= DiscIO::SL_DVD_R_SIZE)
+    return DiscIO::SL_DVD_SIZE;
+  else
+    return DiscIO::DL_DVD_SIZE;
+}
+
 void SetDisc(std::unique_ptr<DiscIO::VolumeDisc> disc,
              std::optional<std::vector<std::string>> auto_disc_change_paths = {})
 {
@@ -433,6 +461,10 @@ void SetDisc(std::unique_ptr<DiscIO::VolumeDisc> disc,
 
   if (has_disc)
   {
+    s_disc_end_offset = GetDiscEndOffset(*disc);
+    if (!disc->IsSizeAccurate())
+      WARN_LOG_FMT(DVDINTERFACE, "Unknown disc size, guessing {0} bytes", s_disc_end_offset);
+
     const DiscIO::BlobReader& blob = disc->GetBlobReader();
     if (!blob.HasFastRandomAccessInBlock() && blob.GetBlockSize() > 0x200000)
     {
@@ -561,8 +593,7 @@ bool UpdateRunningGameMetadata(std::optional<u64> title_id)
   if (!DVDThread::HasDisc())
     return false;
 
-  return DVDThread::UpdateRunningGameMetadata(IOS::HLE::Device::DI::GetCurrentPartition(),
-                                              title_id);
+  return DVDThread::UpdateRunningGameMetadata(IOS::HLE::DIDevice::GetCurrentPartition(), title_id);
 }
 
 void RegisterMMIO(MMIO::Mapping* mmio, u32 base)
@@ -764,20 +795,11 @@ static bool ExecuteReadCommand(u64 dvd_offset, u32 output_address, u32 dvd_lengt
     dvd_length = output_length;
   }
 
-  // Many Wii games intentionally try to read from an offset which is just past the end of a regular
-  // DVD but just before the end of a DVD-R, displaying "Error #001" and failing to boot if the read
-  // succeeds (see https://wiibrew.org/wiki//dev/di#0x8D_DVDLowUnencryptedRead for more details).
-  // It would be nice if we simply could rely on DiscIO for letting us know whether a read is out
-  // of bounds, but this unfortunately doesn't work when using a disc image format that doesn't
-  // store the original size of the disc, most notably WBFS. Instead, we have a little hack here:
-  // reject all non-partition reads that come from IOS that go past the offset 0x50000. IOS only
-  // allows non-partition reads if they are before 0x50000 or if they are in one of the two small
-  // areas 0x118240000-0x118240020 and 0x1FB4E0000-0x1FB4E0020 (both of which only are used for
-  // Error #001 checks), so the only thing we disallow with this hack that actually should be
-  // allowed is non-partition reads in the 0x118240000-0x118240020 area on dual-layer discs.
-  // In practice, dual-layer games don't attempt to do non-partition reads in that area.
-  if (reply_type == ReplyType::IOS && partition == DiscIO::PARTITION_NONE &&
-      dvd_offset + dvd_length > 0x50000)
+  // Many Wii games intentionally try to read from an offset which is just past the end of a
+  // regular DVD but just before the end of a DVD-R, displaying "Error #001" and failing to boot
+  // if the read succeeds, so it's critical that we set the correct error code for such reads.
+  // See https://wiibrew.org/wiki//dev/di#0x8D_DVDLowUnencryptedRead for details on Error #001.
+  if (dvd_offset + dvd_length > s_disc_end_offset)
   {
     SetDriveError(DriveError::BlockOOB);
     *interrupt_type = DIInterruptType::DEINT;
@@ -1228,7 +1250,9 @@ void PerformDecryptingRead(u32 position, u32 length, u32 output_address,
                            const DiscIO::Partition& partition, ReplyType reply_type)
 {
   DIInterruptType interrupt_type = DIInterruptType::TCINT;
-  SetDriveState(DriveState::Ready);
+
+  if (s_drive_state == DriveState::ReadyNoReadsMade)
+    SetDriveState(DriveState::Ready);
 
   const bool command_handled_by_thread =
       ExecuteReadCommand(static_cast<u64>(position) << 2, output_address, length, length, partition,
@@ -1312,7 +1336,7 @@ void FinishExecutingCommand(ReplyType reply_type, DIInterruptType interrupt_type
 
   case ReplyType::IOS:
   {
-    IOS::HLE::Device::DI::InterruptFromDVDInterface(interrupt_type);
+    IOS::HLE::DIDevice::InterruptFromDVDInterface(interrupt_type);
     break;
   }
 
@@ -1342,6 +1366,9 @@ static void ScheduleReads(u64 offset, u32 length, const DiscIO::Partition& parti
   const u32 ticks_per_second = SystemTimers::GetTicksPerSecond();
   const bool wii_disc = DVDThread::GetDiscType() == DiscIO::Platform::WiiDisc;
 
+  // Whether we have performed a seek.
+  bool seek = false;
+
   // Where the DVD read head is (usually parked at the end of the buffer,
   // unless we've interrupted it mid-buffer-read).
   u64 head_position;
@@ -1356,6 +1383,7 @@ static void ScheduleReads(u64 offset, u32 length, const DiscIO::Partition& parti
   // It's rounded to a whole ECC block and never uses Wii partition addressing.
   u64 dvd_offset = DVDThread::PartitionOffsetToRawOffset(offset, partition);
   dvd_offset = Common::AlignDown(dvd_offset, DVD_ECC_BLOCK_SIZE);
+  const u64 first_block = dvd_offset;
 
   if (SConfig::GetInstance().bFastDiscSpeed)
   {
@@ -1450,6 +1478,7 @@ static void ScheduleReads(u64 offset, u32 length, const DiscIO::Partition& parti
       if (dvd_offset != head_position)
       {
         // Unbuffered seek+read
+        seek = true;
         ticks_until_completion += static_cast<u64>(
             ticks_per_second * DVDMath::CalculateSeekTime(head_position, dvd_offset));
 
@@ -1489,27 +1518,45 @@ static void ScheduleReads(u64 offset, u32 length, const DiscIO::Partition& parti
     dvd_offset += DVD_ECC_BLOCK_SIZE;
   } while (length > 0);
 
-  // Update the buffer based on this read. Based on experimental testing,
-  // we will only reuse the old buffer while reading forward. Note that the
-  // buffer start we calculate here is not the actual start of the buffer -
-  // it is just the start of the portion we need to read.
+  // Evict blocks from the buffer which are unlikely to be used again after this read,
+  // so that the buffer gets space for prefetching new blocks. Based on hardware testing,
+  // the blocks which are kept are the most recently accessed block, the block immediately
+  // before it, and all blocks after it.
+  //
+  // If the block immediately before the most recently accessed block is not kept, loading
+  // screens in Pitfall: The Lost Expedition are longer than they should be.
+  // https://bugs.dolphin-emu.org/issues/12279
   const u64 last_block = dvd_offset;
-  if (last_block == buffer_start + DVD_ECC_BLOCK_SIZE && buffer_start != buffer_end)
+  constexpr u32 BUFFER_BACKWARD_SEEK_LIMIT = DVD_ECC_BLOCK_SIZE * 2;
+  if (last_block - buffer_start <= BUFFER_BACKWARD_SEEK_LIMIT && buffer_start != buffer_end)
   {
-    // Special case: reading less than one block at the start of the
-    // buffer won't change the buffer state
+    // Special case: reading the first two blocks of the buffer doesn't change the buffer state
   }
   else
   {
+    // Note that the s_read_buffer_start_offset value we calculate here is not the
+    // actual start of the buffer - it is just the start of the portion we need to read.
+    // The actual start of the buffer is s_read_buffer_end_offset - STREAMING_BUFFER_SIZE.
     if (last_block >= buffer_end)
+    {
       // Full buffer read
       s_read_buffer_start_offset = last_block;
+    }
     else
+    {
       // Partial buffer read
       s_read_buffer_start_offset = buffer_end;
+    }
 
-    s_read_buffer_end_offset = last_block + STREAMING_BUFFER_SIZE - DVD_ECC_BLOCK_SIZE;
-    // Assume the buffer starts reading right after the end of the last operation
+    s_read_buffer_end_offset = last_block + STREAMING_BUFFER_SIZE - BUFFER_BACKWARD_SEEK_LIMIT;
+    if (seek)
+    {
+      // If we seek, the block preceding the first accessed block never gets read into the buffer
+      s_read_buffer_end_offset =
+          std::max(s_read_buffer_end_offset, first_block + STREAMING_BUFFER_SIZE);
+    }
+
+    // Assume the buffer starts prefetching new blocks right after the end of the last operation
     s_read_buffer_start_time = current_time + ticks_until_completion;
     s_read_buffer_end_time =
         s_read_buffer_start_time +

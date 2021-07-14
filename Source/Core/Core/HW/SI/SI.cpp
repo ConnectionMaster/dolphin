@@ -1,6 +1,5 @@
 // Copyright 2008 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "Core/HW/SI/SI.h"
 
@@ -240,7 +239,6 @@ static void SetNoResponse(u32 channel)
     s_status_reg.NOREP3 = 1;
     break;
   }
-  s_com_csr.COMERR = 1;
 }
 
 static void ChangeDeviceCallback(u64 user_data, s64 cycles_late)
@@ -286,7 +284,7 @@ static void GenerateSIInterrupt(SIInterruptType type)
 constexpr u32 SI_XFER_LENGTH_MASK = 0x7f;
 
 // Translate [0,1,2,...,126,127] to [128,1,2,...,126,127]
-constexpr u32 ConvertSILengthField(u32 field)
+constexpr s32 ConvertSILengthField(u32 field)
 {
   return ((field - 1) & SI_XFER_LENGTH_MASK) + 1;
 }
@@ -295,19 +293,19 @@ static void RunSIBuffer(u64 user_data, s64 cycles_late)
 {
   if (s_com_csr.TSTART)
   {
-    const u32 request_length = ConvertSILengthField(s_com_csr.OUTLNGTH);
-    const u32 expected_response_length = ConvertSILengthField(s_com_csr.INLNGTH);
+    const s32 request_length = ConvertSILengthField(s_com_csr.OUTLNGTH);
+    const s32 expected_response_length = ConvertSILengthField(s_com_csr.INLNGTH);
     const std::vector<u8> request_copy(s_si_buffer.data(), s_si_buffer.data() + request_length);
 
     const std::unique_ptr<ISIDevice>& device = s_channel[s_com_csr.CHANNEL].device;
-    const u32 actual_response_length = device->RunBuffer(s_si_buffer.data(), request_length);
+    const s32 actual_response_length = device->RunBuffer(s_si_buffer.data(), request_length);
 
     DEBUG_LOG_FMT(SERIALINTERFACE,
                   "RunSIBuffer  chan: {}  request_length: {}  expected_response_length: {}  "
                   "actual_response_length: {}",
                   s_com_csr.CHANNEL, request_length, expected_response_length,
                   actual_response_length);
-    if (expected_response_length != actual_response_length)
+    if (actual_response_length > 0 && expected_response_length != actual_response_length)
     {
       std::ostringstream ss;
       for (u8 b : request_copy)
@@ -331,6 +329,9 @@ static void RunSIBuffer(u64 user_data, s64 cycles_late)
     if (actual_response_length != 0)
     {
       s_com_csr.TSTART = 0;
+      s_com_csr.COMERR = actual_response_length < 0;
+      if (actual_response_length < 0)
+        SetNoResponse(s_com_csr.CHANNEL);
       GenerateSIInterrupt(INT_TCINT);
     }
     else
@@ -501,8 +502,6 @@ void RegisterMMIO(MMIO::Mapping* mmio, u32 base)
                    s_com_csr.RDSTINTMSK = tmp_com_csr.RDSTINTMSK;
                    s_com_csr.TCINTMSK = tmp_com_csr.TCINTMSK;
 
-                   s_com_csr.COMERR = 0;
-
                    if (tmp_com_csr.RDSTINT)
                      s_com_csr.RDSTINT = 0;
                    if (tmp_com_csr.TCINT)
@@ -511,12 +510,10 @@ void RegisterMMIO(MMIO::Mapping* mmio, u32 base)
                    // be careful: run si-buffer after updating the INT flags
                    if (tmp_com_csr.TSTART)
                    {
+                     if (s_com_csr.TSTART)
+                       CoreTiming::RemoveEvent(s_tranfer_pending_event);
                      s_com_csr.TSTART = 1;
                      RunSIBuffer(0, 0);
-                   }
-                   else if (s_com_csr.TSTART)
-                   {
-                     CoreTiming::RemoveEvent(s_tranfer_pending_event);
                    }
 
                    if (!s_com_csr.TSTART)
@@ -655,6 +652,7 @@ void UpdateDevices()
 
   // Update inputs at the rate of SI
   // Typically 120hz but is variable
+  g_controller_interface.SetCurrentInputChannel(ciface::InputChannel::SerialInterface);
   g_controller_interface.UpdateInput();
 
   // Update channels and set the status bit if there's new data
@@ -686,4 +684,4 @@ u32 GetPollXLines()
   return s_poll.X;
 }
 
-}  // end of namespace SerialInterface
+}  // namespace SerialInterface

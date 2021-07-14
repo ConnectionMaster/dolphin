@@ -1,6 +1,5 @@
 // Copyright 2016 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
@@ -118,25 +117,28 @@ public:
   }
 
   template <typename T>
-  void Set(const Info<T>& config_info, const std::common_type_t<T>& value)
+  bool Set(const Info<T>& config_info, const std::common_type_t<T>& value)
   {
-    Set(config_info.GetLocation(), value);
+    return Set(config_info.GetLocation(), value);
   }
 
   template <typename T>
-  void Set(const Location& location, const T& value)
+  bool Set(const Location& location, const T& value)
   {
-    Set(location, ValueToString(value));
+    return Set(location, ValueToString(value));
   }
 
-  void Set(const Location& location, std::string new_value)
+  bool Set(const Location& location, std::string new_value)
   {
     const auto iter = m_map.find(location);
     if (iter != m_map.end() && iter->second == new_value)
-      return;
+      return false;
     m_is_dirty = true;
     m_map.insert_or_assign(location, std::move(new_value));
+    return true;
   }
+
+  void MarkAsDirty() { m_is_dirty = true; }
 
   Section GetSection(System system, const std::string& section);
   ConstSection GetSection(System system, const std::string& section) const;

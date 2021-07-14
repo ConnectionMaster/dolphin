@@ -1,6 +1,5 @@
 // Copyright 2010 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
@@ -10,7 +9,6 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -125,7 +123,7 @@ public:
 
   void OnTraversalStateChanged() override;
   void OnConnectReady(ENetAddress addr) override;
-  void OnConnectFailed(u8 reason) override;
+  void OnConnectFailed(TraversalConnectFailedReason reason) override;
 
   bool IsFirstInGamePad(int ingame_pad) const;
   int NumLocalPads() const;
@@ -222,8 +220,6 @@ private:
 
   void SyncSaveDataResponse(bool success);
   void SyncCodeResponse(bool success);
-  bool DecompressPacketIntoFile(sf::Packet& packet, const std::string& file_path);
-  std::optional<std::vector<u8>> DecompressPacketIntoBuffer(sf::Packet& packet);
 
   bool PollLocalPad(int local_pad, sf::Packet& packet);
   void SendPadHostPoll(PadIndex pad_num);

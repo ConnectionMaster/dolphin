@@ -1,6 +1,5 @@
 // Copyright 2018 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "DolphinQt/Debugger/MemoryViewWidget.h"
 
@@ -403,6 +402,11 @@ void MemoryViewWidget::OnContextMenu()
 
   menu->addSeparator();
 
+  menu->addAction(tr("Add to watch"), this, [this] {
+    const u32 address = GetContextAddress();
+    const QString name = QStringLiteral("mem_%1").arg(address, 8, 16, QLatin1Char('0'));
+    emit RequestWatch(name, address);
+  });
   menu->addAction(tr("Toggle Breakpoint"), this, &MemoryViewWidget::ToggleBreakpoint);
 
   menu->exec(QCursor::pos());

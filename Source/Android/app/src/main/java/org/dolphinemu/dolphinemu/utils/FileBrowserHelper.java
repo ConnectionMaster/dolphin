@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 package org.dolphinemu.dolphinemu.utils;
 
 import android.content.Context;
@@ -36,6 +38,9 @@ public final class FileBrowserHelper
   {
     GAME_LIKE_EXTENSIONS.add("dff");
   }
+
+  public static final HashSet<String> BIN_EXTENSION = new HashSet<>(Collections.singletonList(
+          "bin"));
 
   public static final HashSet<String> RAW_EXTENSION = new HashSet<>(Collections.singletonList(
           "raw"));

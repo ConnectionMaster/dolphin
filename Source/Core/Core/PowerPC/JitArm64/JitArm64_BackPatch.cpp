@@ -1,6 +1,5 @@
 // Copyright 2014 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cinttypes>
 #include <cstddef>
@@ -15,6 +14,7 @@
 
 #include "Core/HW/Memmap.h"
 #include "Core/PowerPC/JitArm64/Jit.h"
+#include "Core/PowerPC/JitArm64/Jit_Util.h"
 #include "Core/PowerPC/JitArmCommon/BackPatch.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
@@ -62,30 +62,18 @@ void JitArm64::EmitBackpatchRoutine(u32 flags, bool fastmem, bool do_farcode, AR
     {
       if (flags & BackPatchInfo::FLAG_SIZE_F32)
       {
-        m_float_emit.FCVT(32, 64, D0, RS);
-        m_float_emit.REV32(8, D0, D0);
-        m_float_emit.STR(32, D0, MEM_REG, addr);
-      }
-      else if (flags & BackPatchInfo::FLAG_SIZE_F32I)
-      {
-        m_float_emit.REV32(8, D0, RS);
-        m_float_emit.STR(32, D0, MEM_REG, addr);
+        m_float_emit.REV32(8, ARM64Reg::D0, RS);
+        m_float_emit.STR(32, ARM64Reg::D0, MEM_REG, addr);
       }
       else if (flags & BackPatchInfo::FLAG_SIZE_F32X2)
       {
-        m_float_emit.FCVTN(32, D0, RS);
-        m_float_emit.REV32(8, D0, D0);
-        m_float_emit.STR(64, Q0, MEM_REG, addr);
-      }
-      else if (flags & BackPatchInfo::FLAG_SIZE_F32X2I)
-      {
-        m_float_emit.REV32(8, D0, RS);
-        m_float_emit.STR(64, Q0, MEM_REG, addr);
+        m_float_emit.REV32(8, ARM64Reg::D0, RS);
+        m_float_emit.STR(64, ARM64Reg::Q0, MEM_REG, addr);
       }
       else
       {
-        m_float_emit.REV64(8, Q0, RS);
-        m_float_emit.STR(64, Q0, MEM_REG, addr);
+        m_float_emit.REV64(8, ARM64Reg::Q0, RS);
+        m_float_emit.STR(64, ARM64Reg::Q0, MEM_REG, addr);
       }
     }
     else if (flags & BackPatchInfo::FLAG_LOAD && flags & BackPatchInfo::FLAG_MASK_FLOAT)
@@ -103,25 +91,22 @@ void JitArm64::EmitBackpatchRoutine(u32 flags, bool fastmem, bool do_farcode, AR
     }
     else if (flags & BackPatchInfo::FLAG_STORE)
     {
-      ARM64Reg temp = W0;
-      if (flags & BackPatchInfo::FLAG_SIZE_32)
-        REV32(temp, RS);
-      else if (flags & BackPatchInfo::FLAG_SIZE_16)
-        REV16(temp, RS);
+      ARM64Reg temp = ARM64Reg::W0;
+      temp = ByteswapBeforeStore(this, temp, RS, flags, true);
 
       if (flags & BackPatchInfo::FLAG_SIZE_32)
         STR(temp, MEM_REG, addr);
       else if (flags & BackPatchInfo::FLAG_SIZE_16)
         STRH(temp, MEM_REG, addr);
       else
-        STRB(RS, MEM_REG, addr);
+        STRB(temp, MEM_REG, addr);
     }
     else if (flags & BackPatchInfo::FLAG_ZERO_256)
     {
       // This literally only stores 32bytes of zeros to the target address
       ADD(addr, addr, MEM_REG);
-      STP(IndexType::Signed, ZR, ZR, addr, 0);
-      STP(IndexType::Signed, ZR, ZR, addr, 16);
+      STP(IndexType::Signed, ARM64Reg::ZR, ARM64Reg::ZR, addr, 0);
+      STP(IndexType::Signed, ARM64Reg::ZR, ARM64Reg::ZR, addr, 16);
     }
     else
     {
@@ -132,16 +117,7 @@ void JitArm64::EmitBackpatchRoutine(u32 flags, bool fastmem, bool do_farcode, AR
       else if (flags & BackPatchInfo::FLAG_SIZE_8)
         LDRB(RS, MEM_REG, addr);
 
-      if (!(flags & BackPatchInfo::FLAG_REVERSE))
-      {
-        if (flags & BackPatchInfo::FLAG_SIZE_32)
-          REV32(RS, RS);
-        else if (flags & BackPatchInfo::FLAG_SIZE_16)
-          REV16(RS, RS);
-      }
-
-      if (flags & BackPatchInfo::FLAG_EXTEND)
-        SXTH(RS, RS);
+      ByteswapAfterLoad(this, RS, RS, flags, true, false);
     }
   }
   const u8* fastmem_end = GetCodePtr();
@@ -179,112 +155,87 @@ void JitArm64::EmitBackpatchRoutine(u32 flags, bool fastmem, bool do_farcode, AR
     }
 
     ABI_PushRegisters(gprs_to_push);
-    m_float_emit.ABI_PushRegisters(fprs_to_push, X30);
+    m_float_emit.ABI_PushRegisters(fprs_to_push, ARM64Reg::X30);
 
     if (flags & BackPatchInfo::FLAG_STORE && flags & BackPatchInfo::FLAG_MASK_FLOAT)
     {
       if (flags & BackPatchInfo::FLAG_SIZE_F32)
       {
-        m_float_emit.FCVT(32, 64, D0, RS);
-        m_float_emit.UMOV(32, W0, Q0, 0);
-        MOVP2R(X30, &PowerPC::Write_U32);
-        BLR(X30);
-      }
-      else if (flags & BackPatchInfo::FLAG_SIZE_F32I)
-      {
-        m_float_emit.UMOV(32, W0, RS, 0);
-        MOVP2R(X30, &PowerPC::Write_U32);
-        BLR(X30);
+        m_float_emit.UMOV(32, ARM64Reg::W0, RS, 0);
+        MOVP2R(ARM64Reg::X8, &PowerPC::Write_U32);
+        BLR(ARM64Reg::X8);
       }
       else if (flags & BackPatchInfo::FLAG_SIZE_F32X2)
       {
-        m_float_emit.FCVTN(32, D0, RS);
-        m_float_emit.UMOV(64, X0, D0, 0);
-        ROR(X0, X0, 32);
-        MOVP2R(X30, &PowerPC::Write_U64);
-        BLR(X30);
-      }
-      else if (flags & BackPatchInfo::FLAG_SIZE_F32X2I)
-      {
-        m_float_emit.UMOV(64, X0, RS, 0);
-        ROR(X0, X0, 32);
-        MOVP2R(X30, &PowerPC::Write_U64);
-        BLR(X30);
+        m_float_emit.UMOV(64, ARM64Reg::X0, RS, 0);
+        MOVP2R(ARM64Reg::X8, &PowerPC::Write_U64);
+        ROR(ARM64Reg::X0, ARM64Reg::X0, 32);
+        BLR(ARM64Reg::X8);
       }
       else
       {
-        MOVP2R(X30, &PowerPC::Write_U64);
-        m_float_emit.UMOV(64, X0, RS, 0);
-        BLR(X30);
+        m_float_emit.UMOV(64, ARM64Reg::X0, RS, 0);
+        MOVP2R(ARM64Reg::X8, &PowerPC::Write_U64);
+        BLR(ARM64Reg::X8);
       }
     }
     else if (flags & BackPatchInfo::FLAG_LOAD && flags & BackPatchInfo::FLAG_MASK_FLOAT)
     {
       if (flags & BackPatchInfo::FLAG_SIZE_F32)
       {
-        MOVP2R(X30, &PowerPC::Read_U32);
-        BLR(X30);
-        m_float_emit.INS(32, RS, 0, X0);
+        MOVP2R(ARM64Reg::X8, &PowerPC::Read_U32);
+        BLR(ARM64Reg::X8);
+        m_float_emit.INS(32, RS, 0, ARM64Reg::X0);
       }
       else
       {
-        MOVP2R(X30, &PowerPC::Read_F64);
-        BLR(X30);
-        m_float_emit.INS(64, RS, 0, X0);
+        MOVP2R(ARM64Reg::X8, &PowerPC::Read_F64);
+        BLR(ARM64Reg::X8);
+        m_float_emit.INS(64, RS, 0, ARM64Reg::X0);
       }
     }
     else if (flags & BackPatchInfo::FLAG_STORE)
     {
-      MOV(W0, RS);
+      ARM64Reg temp = ARM64Reg::W0;
+      temp = ByteswapBeforeStore(this, temp, RS, flags, false);
+      if (temp != ARM64Reg::W0)
+        MOV(ARM64Reg::W0, temp);
 
       if (flags & BackPatchInfo::FLAG_SIZE_32)
-        MOVP2R(X30, &PowerPC::Write_U32);
+        MOVP2R(ARM64Reg::X8, &PowerPC::Write_U32);
       else if (flags & BackPatchInfo::FLAG_SIZE_16)
-        MOVP2R(X30, &PowerPC::Write_U16);
+        MOVP2R(ARM64Reg::X8, &PowerPC::Write_U16);
       else
-        MOVP2R(X30, &PowerPC::Write_U8);
+        MOVP2R(ARM64Reg::X8, &PowerPC::Write_U8);
 
-      BLR(X30);
+      BLR(ARM64Reg::X8);
     }
     else if (flags & BackPatchInfo::FLAG_ZERO_256)
     {
-      MOVP2R(X30, &PowerPC::ClearCacheLine);
-      BLR(X30);
+      MOVP2R(ARM64Reg::X8, &PowerPC::ClearCacheLine);
+      BLR(ARM64Reg::X8);
     }
     else
     {
       if (flags & BackPatchInfo::FLAG_SIZE_32)
-        MOVP2R(X30, &PowerPC::Read_U32);
+        MOVP2R(ARM64Reg::X8, &PowerPC::Read_U32);
       else if (flags & BackPatchInfo::FLAG_SIZE_16)
-        MOVP2R(X30, &PowerPC::Read_U16);
+        MOVP2R(ARM64Reg::X8, &PowerPC::Read_U16);
       else if (flags & BackPatchInfo::FLAG_SIZE_8)
-        MOVP2R(X30, &PowerPC::Read_U8);
+        MOVP2R(ARM64Reg::X8, &PowerPC::Read_U8);
 
-      BLR(X30);
+      BLR(ARM64Reg::X8);
 
-      if (!(flags & BackPatchInfo::FLAG_REVERSE))
-      {
-        MOV(RS, W0);
-      }
-      else
-      {
-        if (flags & BackPatchInfo::FLAG_SIZE_32)
-          REV32(RS, W0);
-        else if (flags & BackPatchInfo::FLAG_SIZE_16)
-          REV16(RS, W0);
-      }
-
-      if (flags & BackPatchInfo::FLAG_EXTEND)
-        SXTH(RS, RS);
+      ByteswapAfterLoad(this, RS, ARM64Reg::W0, flags, false, false);
     }
 
-    m_float_emit.ABI_PopRegisters(fprs_to_push, X30);
+    m_float_emit.ABI_PopRegisters(fprs_to_push, ARM64Reg::X30);
     ABI_PopRegisters(gprs_to_push);
   }
 
   if (in_far_code)
   {
-    RET(X30);
+    RET(ARM64Reg::X30);
     SwitchToNearCode();
   }
 }
@@ -316,6 +267,7 @@ bool JitArm64::HandleFastmemFault(uintptr_t access_address, SContext* ctx)
   if ((const u8*)ctx->CTX_PC - fault_location > fastmem_area_length)
     return false;
 
+  const Common::ScopedJITPageWriteAndNoExecute enable_jit_page_writes;
   ARM64XEmitter emitter((u8*)fault_location);
 
   emitter.BL(slow_handler_iter->second.slowmem_code);
@@ -327,6 +279,7 @@ bool JitArm64::HandleFastmemFault(uintptr_t access_address, SContext* ctx)
   m_fault_to_handler.erase(slow_handler_iter);
 
   emitter.FlushIcache();
+
   ctx->CTX_PC = reinterpret_cast<std::uintptr_t>(fault_location);
   return true;
 }

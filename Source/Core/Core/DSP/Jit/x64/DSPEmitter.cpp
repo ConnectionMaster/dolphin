@@ -1,6 +1,5 @@
 // Copyright 2010 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "Core/DSP/Jit/x64/DSPEmitter.h"
 
@@ -51,11 +50,10 @@ DSPEmitter::~DSPEmitter()
 
 u16 DSPEmitter::RunCycles(u16 cycles)
 {
-  if (m_dsp_core.DSPState().external_interrupt_waiting)
+  if (m_dsp_core.DSPState().external_interrupt_waiting.exchange(false, std::memory_order_acquire))
   {
     m_dsp_core.CheckExternalInterrupt();
     m_dsp_core.CheckExceptions();
-    m_dsp_core.SetExternalInterrupt(false);
   }
 
   m_cycles_left = cycles;
@@ -489,17 +487,21 @@ Gen::OpArg DSPEmitter::M_SDSP_cr()
 
 Gen::OpArg DSPEmitter::M_SDSP_external_interrupt_waiting()
 {
+  static_assert(decltype(SDSP::external_interrupt_waiting)::is_always_lock_free &&
+                sizeof(SDSP::external_interrupt_waiting) == sizeof(u8));
+
   return MDisp(R15, static_cast<int>(offsetof(SDSP, external_interrupt_waiting)));
 }
 
 Gen::OpArg DSPEmitter::M_SDSP_r_st(size_t index)
 {
-  return MDisp(R15, static_cast<int>(offsetof(SDSP, r.st[index])));
+  return MDisp(R15, static_cast<int>(offsetof(SDSP, r.st) + sizeof(SDSP::r.st[0]) * index));
 }
 
 Gen::OpArg DSPEmitter::M_SDSP_reg_stack_ptrs(size_t index)
 {
-  return MDisp(R15, static_cast<int>(offsetof(SDSP, reg_stack_ptrs[index])));
+  return MDisp(R15, static_cast<int>(offsetof(SDSP, reg_stack_ptrs) +
+                                     sizeof(SDSP::reg_stack_ptrs[0]) * index));
 }
 
 }  // namespace DSP::JIT::x64

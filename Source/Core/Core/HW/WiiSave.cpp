@@ -1,6 +1,5 @@
 // Copyright 2010 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 // Based off of tachtig/twintig http://git.infradead.org/?p=users/segher/wii.git
 // Copyright 2007,2008  Segher Boessenkool  <segher@kernel.crashing.org>
@@ -26,8 +25,8 @@
 #include "Common/Align.h"
 #include "Common/CommonTypes.h"
 #include "Common/Crypto/ec.h"
-#include "Common/File.h"
 #include "Common/FileUtil.h"
+#include "Common/IOFile.h"
 #include "Common/Lazy.h"
 #include "Common/Logging/Log.h"
 #include "Common/NandPaths.h"

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 package org.dolphinemu.dolphinemu.model;
 
 import androidx.annotation.Keep;
@@ -17,12 +19,12 @@ public class GameFileCache
   @Keep
   private long mPointer;
 
-  public GameFileCache(String path)
+  public GameFileCache()
   {
-    mPointer = newGameFileCache(path);
+    mPointer = newGameFileCache();
   }
 
-  private static native long newGameFileCache(String path);
+  private static native long newGameFileCache();
 
   @Override
   public native void finalize();
@@ -99,7 +101,7 @@ public class GameFileCache
    *
    * @return true if the cache was modified
    */
-  public boolean scanLibrary()
+  public boolean update()
   {
     boolean recursiveScan = BooleanSetting.MAIN_RECURSIVE_ISO_PATHS.getBooleanGlobal();
 
@@ -107,24 +109,20 @@ public class GameFileCache
 
     String[] folderPaths = folderPathsSet.toArray(new String[0]);
 
-    boolean cacheChanged = update(folderPaths, recursiveScan);
-    cacheChanged |= updateAdditionalMetadata();
-    if (cacheChanged)
-    {
-      save();
-    }
-    return cacheChanged;
+    return update(folderPaths, recursiveScan);
   }
+
+  public native int getSize();
 
   public native GameFile[] getAllGames();
 
   public native GameFile addOrGet(String gamePath);
 
-  private native boolean update(String[] folderPaths, boolean recursiveScan);
+  public native boolean update(String[] folderPaths, boolean recursiveScan);
 
-  private native boolean updateAdditionalMetadata();
+  public native boolean updateAdditionalMetadata();
 
   public native boolean load();
 
-  private native boolean save();
+  public native boolean save();
 }

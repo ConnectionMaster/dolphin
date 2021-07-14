@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 package org.dolphinemu.dolphinemu.activities;
 
 import android.content.Context;
@@ -44,16 +46,13 @@ import org.dolphinemu.dolphinemu.fragments.MenuFragment;
 import org.dolphinemu.dolphinemu.fragments.SaveLoadStateFragment;
 import org.dolphinemu.dolphinemu.overlay.InputOverlay;
 import org.dolphinemu.dolphinemu.overlay.InputOverlayPointer;
-import org.dolphinemu.dolphinemu.ui.main.MainActivity;
 import org.dolphinemu.dolphinemu.ui.main.MainPresenter;
-import org.dolphinemu.dolphinemu.ui.main.TvMainActivity;
 import org.dolphinemu.dolphinemu.utils.AfterDirectoryInitializationRunner;
 import org.dolphinemu.dolphinemu.utils.ControllerMappingHelper;
 import org.dolphinemu.dolphinemu.utils.FileBrowserHelper;
 import org.dolphinemu.dolphinemu.utils.IniFile;
 import org.dolphinemu.dolphinemu.utils.MotionListener;
 import org.dolphinemu.dolphinemu.utils.Rumble;
-import org.dolphinemu.dolphinemu.utils.TvUtil;
 
 import java.io.File;
 import java.lang.annotation.Retention;
@@ -245,14 +244,7 @@ public final class EmulationActivity extends AppCompatActivity
   {
     super.onCreate(savedInstanceState);
 
-    if (TvUtil.isLeanback(getApplicationContext()))
-    {
-      TvMainActivity.skipRescanningLibrary();
-    }
-    else
-    {
-      MainActivity.skipRescanningLibrary();
-    }
+    MainPresenter.skipRescanningLibrary();
 
     if (savedInstanceState == null)
     {
@@ -414,7 +406,7 @@ public final class EmulationActivity extends AppCompatActivity
     if (requestCode == REQUEST_CHANGE_DISC)
     {
       // If the user picked a file, as opposed to just backing out.
-      if (resultCode == MainActivity.RESULT_OK)
+      if (resultCode == RESULT_OK)
       {
         NativeLibrary.ChangeDisc(result.getData().toString());
       }
@@ -544,7 +536,7 @@ public final class EmulationActivity extends AppCompatActivity
         toggleControls();
         break;
 
-      // Adjust the scale of the overlay controls.
+      // Adjust the scale and opacity of the overlay controls.
       case MENU_ACTION_ADJUST_SCALE:
         adjustScale();
         break;
@@ -828,15 +820,14 @@ public final class EmulationActivity extends AppCompatActivity
   private void adjustScale()
   {
     LayoutInflater inflater = LayoutInflater.from(this);
-    View view = inflater.inflate(R.layout.dialog_seekbar, null);
+    View view = inflater.inflate(R.layout.dialog_input_adjust, null);
 
-    final SeekBar seekbar = view.findViewById(R.id.seekbar);
-    final TextView value = view.findViewById(R.id.text_value);
-    final TextView units = view.findViewById(R.id.text_units);
+    final SeekBar scaleSeekbar = view.findViewById(R.id.input_scale_seekbar);
+    final TextView scaleValue = view.findViewById(R.id.input_scale_value);
 
-    seekbar.setMax(150);
-    seekbar.setProgress(IntSetting.MAIN_CONTROL_SCALE.getInt(mSettings));
-    seekbar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener()
+    scaleSeekbar.setMax(150);
+    scaleSeekbar.setProgress(IntSetting.MAIN_CONTROL_SCALE.getInt(mSettings));
+    scaleSeekbar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener()
     {
       public void onStartTrackingTouch(SeekBar seekBar)
       {
@@ -845,7 +836,7 @@ public final class EmulationActivity extends AppCompatActivity
 
       public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser)
       {
-        value.setText(String.valueOf(progress + 50));
+        scaleValue.setText((progress + 50) + "%");
       }
 
       public void onStopTrackingTouch(SeekBar seekBar)
@@ -854,20 +845,46 @@ public final class EmulationActivity extends AppCompatActivity
       }
     });
 
-    value.setText(String.valueOf(seekbar.getProgress() + 50));
-    units.setText("%");
+    scaleValue.setText((scaleSeekbar.getProgress() + 50) + "%");
+
+    // alpha
+    final SeekBar seekbarOpacity = view.findViewById(R.id.input_opacity_seekbar);
+    final TextView valueOpacity = view.findViewById(R.id.input_opacity_value);
+
+    seekbarOpacity.setMax(100);
+    seekbarOpacity.setProgress(IntSetting.MAIN_CONTROL_OPACITY.getInt(mSettings));
+    seekbarOpacity.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener()
+    {
+      public void onStartTrackingTouch(SeekBar seekBar)
+      {
+        // Do nothing
+      }
+
+      public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser)
+      {
+        valueOpacity.setText(progress + "%");
+      }
+
+      public void onStopTrackingTouch(SeekBar seekBar)
+      {
+        // Do nothing
+      }
+    });
+    valueOpacity.setText(seekbarOpacity.getProgress() + "%");
 
     AlertDialog.Builder builder = new AlertDialog.Builder(this, R.style.DolphinDialogBase);
-    builder.setTitle(R.string.emulation_control_scale);
+    builder.setTitle(R.string.emulation_control_adjustments);
     builder.setView(view);
     builder.setPositiveButton(R.string.ok, (dialogInterface, i) ->
     {
-      IntSetting.MAIN_CONTROL_SCALE.setInt(mSettings, seekbar.getProgress());
+      IntSetting.MAIN_CONTROL_SCALE.setInt(mSettings, scaleSeekbar.getProgress());
+      IntSetting.MAIN_CONTROL_OPACITY.setInt(mSettings, seekbarOpacity.getProgress());
       mEmulationFragment.refreshInputOverlay();
     });
     builder.setNeutralButton(R.string.default_values, (dialogInterface, i) ->
     {
       IntSetting.MAIN_CONTROL_SCALE.delete(mSettings);
+      IntSetting.MAIN_CONTROL_OPACITY.delete(mSettings);
       mEmulationFragment.refreshInputOverlay();
     });
 

@@ -1,6 +1,5 @@
 // Copyright 2020 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
@@ -32,6 +31,7 @@ public:
   virtual void MoveForward(float amt) = 0;
 
   virtual void Rotate(const Common::Vec3& amt) = 0;
+  virtual void Rotate(const Common::Quaternion& quat) = 0;
 
   virtual void Reset() = 0;
 
@@ -51,6 +51,7 @@ public:
   void MoveForward(float amt);
 
   void Rotate(const Common::Vec3& amt);
+  void Rotate(const Common::Quaternion& amt);
 
   void IncreaseFovX(float fov);
   void IncreaseFovY(float fov);
@@ -76,9 +77,8 @@ private:
   std::optional<FreeLook::ControlType> m_current_type;
   std::unique_ptr<CameraController> m_camera_controller;
 
-  float m_fov_step_size = 0.025f;
-  float m_speed = 1.0f;
-  bool m_enabled = true;
+  float m_min_fov_multiplier = 0.025f;
+  float m_speed = 60.0f;
 };
 
 extern FreeLookCamera g_freelook_camera;

@@ -1,6 +1,5 @@
 // Copyright 2017 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "Core/IOS/MIOS.h"
 
@@ -86,6 +85,7 @@ bool Load()
   NOTICE_LOG_FMT(IOS, "IPL ready.");
   SConfig::GetInstance().m_is_mios = true;
   DVDInterface::UpdateRunningGameMetadata();
+  SConfig::OnNewTitleLoad();
   return true;
 }
 }  // namespace IOS::HLE::MIOS

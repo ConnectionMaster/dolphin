@@ -1,10 +1,9 @@
 // Copyright 2019 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "VideoBackends/D3D12/DescriptorHeapManager.h"
 #include "Common/Assert.h"
-#include "VideoBackends/D3D12/DXContext.h"
+#include "VideoBackends/D3D12/DX12Context.h"
 #include "VideoCommon/VideoConfig.h"
 
 namespace DX12

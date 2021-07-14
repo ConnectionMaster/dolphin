@@ -1,10 +1,10 @@
 // Copyright 2008 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
 #include <string>
+#include <vector>
 
 // Host - defines an interface for the emulator core to communicate back to the
 // OS-specific layer
@@ -32,9 +32,12 @@ enum class HostMessageID
   WMUserJobDispatch,
 };
 
+std::vector<std::string> Host_GetPreferredLocales();
 bool Host_UIBlocksControllerState();
 bool Host_RendererHasFocus();
+bool Host_RendererHasFullFocus();
 bool Host_RendererIsFullscreen();
+
 void Host_Message(HostMessageID id);
 void Host_NotifyMapLoaded();
 void Host_RefreshDSPDebuggerWindow();

@@ -2,7 +2,6 @@ add_library(common
   Analytics.cpp
   Analytics.h
   Assert.h
-  Atomic.h
   BitField.h
   BitSet.h
   BitUtils.h
@@ -42,9 +41,8 @@ add_library(common
   DynamicLibrary.h
   ENetUtil.cpp
   ENetUtil.h
+  EnumFormatter.h
   Event.h
-  File.cpp
-  File.h
   FileSearch.cpp
   FileSearch.h
   FileUtil.cpp
@@ -66,6 +64,8 @@ add_library(common
   IniFile.cpp
   IniFile.h
   Inline.h
+  IOFile.cpp
+  IOFile.h
   JitRegister.cpp
   JitRegister.h
   Lazy.h
@@ -106,10 +106,12 @@ add_library(common
   SDCardUtil.cpp
   SDCardUtil.h
   Semaphore.h
-  SFMLHelper.cpp
-  SFMLHelper.h
   SettingsHandler.cpp
   SettingsHandler.h
+  SFMLHelper.cpp
+  SFMLHelper.h
+  SocketContext.cpp
+  SocketContext.h
   SPSCQueue.h
   StringUtil.cpp
   StringUtil.h
@@ -122,6 +124,7 @@ add_library(common
   TraversalClient.cpp
   TraversalClient.h
   TraversalProto.h
+  TypeUtils.h
   UPnP.cpp
   UPnP.h
   VariantUtil.h
@@ -196,7 +199,7 @@ if(_M_ARM_64)
     Arm64Emitter.h
     ArmCommon.h
     ArmCPUDetect.cpp
-    GenericFPURoundMode.cpp
+    ArmFPURoundMode.cpp
   )
 else()
   if(_M_X86) #X86

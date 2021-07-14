@@ -1,10 +1,11 @@
 // Copyright 2009 Dolphin Emulator Project
-// Licensed under GPLv2+
-// Refer to the license.txt file included.
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cstring>
 
 #include "AudioCommon/PulseAudioStream.h"
+
+#include "Common/Assert.h"
 #include "Common/CommonTypes.h"
 #include "Common/Logging/Log.h"
 #include "Common/Thread.h"
@@ -104,7 +105,7 @@ bool PulseAudio::PulseInit()
   }
   ss.channels = m_channels;
   ss.rate = m_mixer->GetSampleRate();
-  assert(pa_sample_spec_valid(&ss));
+  ASSERT(pa_sample_spec_valid(&ss));
   m_pa_s = pa_stream_new(m_pa_ctx, "Playback", &ss, channel_map_p);
   pa_stream_set_write_callback(m_pa_s, WriteCallback, this);
   pa_stream_set_underflow_callback(m_pa_s, UnderflowCallback, this);
