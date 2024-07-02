@@ -227,8 +227,6 @@ MainWindow::MainWindow(std::unique_ptr<BootParameters> boot_parameters,
   setAcceptDrops(true);
   setAttribute(Qt::WA_NativeWindow);
 
-  InitControllers();
-
   CreateComponents();
 
   ConnectGameList();
@@ -237,6 +235,14 @@ MainWindow::MainWindow(std::unique_ptr<BootParameters> boot_parameters,
   ConnectRenderWidget();
   ConnectStack();
   ConnectMenuBar();
+
+  QSettings& settings = Settings::GetQSettings();
+  restoreState(settings.value(QStringLiteral("mainwindow/state")).toByteArray());
+  restoreGeometry(settings.value(QStringLiteral("mainwindow/geometry")).toByteArray());
+  if (!Settings::Instance().IsBatchModeEnabled())
+    show();
+
+  InitControllers();
   ConnectHotkeys();
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
@@ -289,11 +295,6 @@ MainWindow::MainWindow(std::unique_ptr<BootParameters> boot_parameters,
   m_state_slot =
       std::clamp(Settings::Instance().GetStateSlot(), 1, static_cast<int>(State::NUM_STATES));
 
-  QSettings& settings = Settings::GetQSettings();
-
-  restoreState(settings.value(QStringLiteral("mainwindow/state")).toByteArray());
-  restoreGeometry(settings.value(QStringLiteral("mainwindow/geometry")).toByteArray());
-
   m_render_widget_geometry = settings.value(QStringLiteral("renderwidget/geometry")).toByteArray();
 
   // Restoring of window states can sometimes go wrong, resulting in widgets being visible when they
@@ -345,8 +346,11 @@ MainWindow::~MainWindow()
 
   QSettings& settings = Settings::GetQSettings();
 
-  settings.setValue(QStringLiteral("mainwindow/state"), saveState());
-  settings.setValue(QStringLiteral("mainwindow/geometry"), saveGeometry());
+  if (!Settings::Instance().IsBatchModeEnabled())
+  {
+    settings.setValue(QStringLiteral("mainwindow/state"), saveState());
+    settings.setValue(QStringLiteral("mainwindow/geometry"), saveGeometry());
+  }
 
   settings.setValue(QStringLiteral("renderwidget/geometry"), m_render_widget_geometry);
 
@@ -499,7 +503,7 @@ void MainWindow::CreateComponents()
   connect(m_breakpoint_widget, &BreakpointWidget::BreakpointsChanged, m_memory_widget,
           &MemoryWidget::Update);
   connect(m_breakpoint_widget, &BreakpointWidget::ShowCode, [this](u32 address) {
-    if (Core::GetState() == Core::State::Paused)
+    if (Core::GetState(Core::System::GetInstance()) == Core::State::Paused)
       m_code_widget->SetAddress(address, CodeViewWidget::SetAddressUpdate::WithDetailedUpdate);
   });
   connect(m_breakpoint_widget, &BreakpointWidget::ShowMemory, m_memory_widget,
@@ -591,12 +595,6 @@ void MainWindow::ConnectMenuBar()
   connect(m_game_list, &GameList::SelectionChanged, m_menu_bar, &MenuBar::SelectionChanged);
   connect(this, &MainWindow::ReadOnlyModeChanged, m_menu_bar, &MenuBar::ReadOnlyModeChanged);
   connect(this, &MainWindow::RecordingStatusChanged, m_menu_bar, &MenuBar::RecordingStatusChanged);
-
-  // Symbols
-  connect(m_menu_bar, &MenuBar::NotifySymbolsUpdated, [this] {
-    m_code_widget->UpdateSymbols();
-    m_code_widget->Update();
-  });
 }
 
 void MainWindow::ConnectHotkeys()
@@ -829,9 +827,9 @@ void MainWindow::Play(const std::optional<std::string>& savestate_path)
   // Otherwise, play the default game.
   // Otherwise, play the last played game, if there is one.
   // Otherwise, prompt for a new game.
-  if (Core::GetState() == Core::State::Paused)
+  if (Core::GetState(Core::System::GetInstance()) == Core::State::Paused)
   {
-    Core::SetState(Core::State::Running);
+    Core::SetState(Core::System::GetInstance(), Core::State::Running);
   }
   else
   {
@@ -859,12 +857,12 @@ void MainWindow::Play(const std::optional<std::string>& savestate_path)
 
 void MainWindow::Pause()
 {
-  Core::SetState(Core::State::Paused);
+  Core::SetState(Core::System::GetInstance(), Core::State::Paused);
 }
 
 void MainWindow::TogglePause()
 {
-  if (Core::GetState() == Core::State::Paused)
+  if (Core::GetState(Core::System::GetInstance()) == Core::State::Paused)
   {
     Play();
   }
@@ -907,7 +905,7 @@ void MainWindow::OnStopComplete()
 
 bool MainWindow::RequestStop()
 {
-  if (!Core::IsRunning())
+  if (!Core::IsRunning(Core::System::GetInstance()))
   {
     Core::QueueHostJob([this](Core::System&) { OnStopComplete(); }, true);
     return true;
@@ -932,13 +930,13 @@ bool MainWindow::RequestStop()
 
     Common::ScopeGuard confirm_lock([this] { m_stop_confirm_showing = false; });
 
-    const Core::State state = Core::GetState();
+    const Core::State state = Core::GetState(Core::System::GetInstance());
 
     // Only pause the game, if NetPlay is not running
     bool pause = !Settings::Instance().GetNetPlayClient();
 
     if (pause)
-      Core::SetState(Core::State::Paused);
+      Core::SetState(Core::System::GetInstance(), Core::State::Paused);
 
     if (rendered_widget_was_active)
     {
@@ -968,7 +966,7 @@ bool MainWindow::RequestStop()
       m_render_widget->SetWaitingForMessageBox(false);
 
       if (pause)
-        Core::SetState(state);
+        Core::SetState(Core::System::GetInstance(), state);
 
       return false;
     }
@@ -989,8 +987,8 @@ bool MainWindow::RequestStop()
 
     // Unpause because gracefully shutting down needs the game to actually request a shutdown.
     // TODO: Do not unpause in debug mode to allow debugging until the complete shutdown.
-    if (Core::GetState() == Core::State::Paused)
-      Core::SetState(Core::State::Running);
+    if (Core::GetState(Core::System::GetInstance()) == Core::State::Paused)
+      Core::SetState(Core::System::GetInstance(), Core::State::Running);
 
     // Tell NetPlay about the power event
     if (NetPlay::IsNetPlayRunning())
@@ -1023,7 +1021,7 @@ void MainWindow::Reset()
 
 void MainWindow::FrameAdvance()
 {
-  Core::DoFrameStep();
+  Core::DoFrameStep(Core::System::GetInstance());
 }
 
 void MainWindow::FullScreen()
@@ -1114,7 +1112,7 @@ void MainWindow::StartGame(std::unique_ptr<BootParameters>&& parameters)
   }
 
   // If we're running, only start a new game once we've stopped the last.
-  if (Core::GetState() != Core::State::Uninitialized)
+  if (Core::GetState(Core::System::GetInstance()) != Core::State::Uninitialized)
   {
     if (!RequestStop())
       return;
@@ -1538,7 +1536,7 @@ void MainWindow::NetPlayInit()
 
 bool MainWindow::NetPlayJoin()
 {
-  if (Core::IsRunning())
+  if (Core::IsRunning(Core::System::GetInstance()))
   {
     ModalMessageBox::critical(nullptr, tr("Error"),
                               tr("Can't start a NetPlay Session while a game is still running!"));
@@ -1605,7 +1603,7 @@ bool MainWindow::NetPlayJoin()
 
 bool MainWindow::NetPlayHost(const UICommon::GameFile& game)
 {
-  if (Core::IsRunning())
+  if (Core::IsRunning(Core::System::GetInstance()))
   {
     ModalMessageBox::critical(nullptr, tr("Error"),
                               tr("Can't start a NetPlay Session while a game is still running!"));
@@ -1666,8 +1664,8 @@ void MainWindow::NetPlayQuit()
 
 void MainWindow::UpdateScreenSaverInhibition()
 {
-  const bool inhibit =
-      Config::Get(Config::MAIN_DISABLE_SCREENSAVER) && (Core::GetState() == Core::State::Running);
+  const bool inhibit = Config::Get(Config::MAIN_DISABLE_SCREENSAVER) &&
+                       (Core::GetState(Core::System::GetInstance()) == Core::State::Running);
 
   if (inhibit == m_is_screensaver_inhibited)
     return;
@@ -1852,7 +1850,7 @@ void MainWindow::OnImportNANDBackup()
 
   result.wait();
 
-  m_menu_bar->UpdateToolsMenu(Core::IsRunning());
+  m_menu_bar->UpdateToolsMenu(Core::IsRunning(Core::System::GetInstance()));
 }
 
 void MainWindow::OnPlayRecording()
@@ -1882,8 +1880,9 @@ void MainWindow::OnPlayRecording()
 
 void MainWindow::OnStartRecording()
 {
-  auto& movie = Core::System::GetInstance().GetMovie();
-  if ((!Core::IsRunningAndStarted() && Core::IsRunning()) || movie.IsRecordingInput() ||
+  auto& system = Core::System::GetInstance();
+  auto& movie = system.GetMovie();
+  if (Core::GetState(system) == Core::State::Starting || movie.IsRecordingInput() ||
       movie.IsPlayingInput())
   {
     return;
@@ -1915,7 +1914,7 @@ void MainWindow::OnStartRecording()
   {
     emit RecordingStatusChanged(true);
 
-    if (!Core::IsRunning())
+    if (!Core::IsRunning(system))
       Play();
   }
 }
@@ -1932,12 +1931,13 @@ void MainWindow::OnStopRecording()
 
 void MainWindow::OnExportRecording()
 {
-  Core::RunAsCPUThread([this] {
-    QString dtm_file = DolphinFileDialog::getSaveFileName(
-        this, tr("Save Recording File As"), QString(), tr("Dolphin TAS Movies (*.dtm)"));
-    if (!dtm_file.isEmpty())
-      Core::System::GetInstance().GetMovie().SaveRecording(dtm_file.toStdString());
-  });
+  auto& system = Core::System::GetInstance();
+  const Core::CPUThreadGuard guard(system);
+
+  QString dtm_file = DolphinFileDialog::getSaveFileName(
+      this, tr("Save Recording File As"), QString(), tr("Dolphin TAS Movies (*.dtm)"));
+  if (!dtm_file.isEmpty())
+    system.GetMovie().SaveRecording(dtm_file.toStdString());
 }
 
 void MainWindow::OnActivateChat()
@@ -1975,10 +1975,11 @@ void MainWindow::ShowTASInput()
     }
   }
 
+  auto& system = Core::System::GetInstance();
   for (int i = 0; i < num_wii_controllers; i++)
   {
     if (Config::Get(Config::GetInfoForWiimoteSource(i)) == WiimoteSource::Emulated &&
-        (!Core::IsRunning() || Core::System::GetInstance().IsWii()))
+        (!Core::IsRunning(system) || system.IsWii()))
     {
       SetQWidgetWindowDecorations(m_wii_tas_input_windows[i]);
       m_wii_tas_input_windows[i]->show();
@@ -1990,13 +1991,12 @@ void MainWindow::ShowTASInput()
 
 void MainWindow::OnConnectWiiRemote(int id)
 {
-  Core::RunAsCPUThread([&] {
-    if (const auto bt = WiiUtils::GetBluetoothEmuDevice())
-    {
-      const auto wm = bt->AccessWiimoteByIndex(id);
-      wm->Activate(!wm->IsConnected());
-    }
-  });
+  const Core::CPUThreadGuard guard(Core::System::GetInstance());
+  if (const auto bt = WiiUtils::GetBluetoothEmuDevice())
+  {
+    const auto wm = bt->AccessWiimoteByIndex(id);
+    wm->Activate(!wm->IsConnected());
+  }
 }
 
 #ifdef USE_RETRO_ACHIEVEMENTS
@@ -2011,6 +2011,7 @@ void MainWindow::ShowAchievementsWindow()
   m_achievements_window->show();
   m_achievements_window->raise();
   m_achievements_window->activateWindow();
+  m_achievements_window->UpdateData(AchievementManager::UpdatedItems{.all = true});
 }
 
 void MainWindow::ShowAchievementSettings()

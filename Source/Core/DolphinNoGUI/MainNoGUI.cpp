@@ -57,7 +57,7 @@ std::vector<std::string> Host_GetPreferredLocales()
   return {};
 }
 
-void Host_NotifyMapLoaded()
+void Host_PPCSymbolsChanged()
 {
 }
 
@@ -109,6 +109,11 @@ bool Host_RendererHasFullFocus()
 bool Host_RendererIsFullscreen()
 {
   return s_platform->IsWindowFullscreen();
+}
+
+bool Host_TASInputHasFocus()
+{
+  return false;
 }
 
 void Host_YieldToUI()

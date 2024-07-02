@@ -101,10 +101,6 @@ namespace Core
 static bool s_wants_determinism;
 
 // Declarations and definitions
-static bool s_is_stopping = false;
-static bool s_hardware_initialized = false;
-static bool s_is_started = false;
-static Common::Flag s_is_booting;
 static std::thread s_emu_thread;
 static std::vector<StateChangedCallbackFunc> s_on_state_changed_callbacks;
 
@@ -113,6 +109,10 @@ static bool s_is_throttler_temp_disabled = false;
 static std::atomic<double> s_last_actual_emulation_speed{1.0};
 static bool s_frame_step = false;
 static std::atomic<bool> s_stop_frame_step;
+
+// The value Paused is never stored in this variable. The core is considered to be in
+// the Paused state if this variable is Running and the CPU reports that it's stepping.
+static std::atomic<State> s_state = State::Uninitialized;
 
 #ifdef USE_MEMORYWATCHER
 static std::unique_ptr<MemoryWatcher> s_memory_watcher;
@@ -190,7 +190,7 @@ std::string StopMessage(bool main_thread, std::string_view message)
 
 void DisplayMessage(std::string message, int time_in_ms)
 {
-  if (!IsRunning())
+  if (!IsRunningOrStarting(Core::System::GetInstance()))
     return;
 
   // Actually displaying non-ASCII could cause things to go pear-shaped
@@ -200,14 +200,15 @@ void DisplayMessage(std::string message, int time_in_ms)
   OSD::AddMessage(std::move(message), time_in_ms);
 }
 
-bool IsRunning()
+bool IsRunning(Core::System& system)
 {
-  return (GetState() != State::Uninitialized || s_hardware_initialized) && !s_is_stopping;
+  return s_state.load() == State::Running;
 }
 
-bool IsRunningAndStarted()
+bool IsRunningOrStarting(Core::System& system)
 {
-  return s_is_started && !s_is_stopping;
+  const State state = s_state.load();
+  return state == State::Running || state == State::Starting;
 }
 
 bool IsCPUThread()
@@ -236,7 +237,7 @@ bool Init(Core::System& system, std::unique_ptr<BootParameters> boot, const Wind
 {
   if (s_emu_thread.joinable())
   {
-    if (IsRunning())
+    if (IsRunning(system))
     {
       PanicAlertFmtT("Emu Thread already running");
       return false;
@@ -262,7 +263,7 @@ bool Init(Core::System& system, std::unique_ptr<BootParameters> boot, const Wind
   g_video_backend->PrepareWindow(prepared_wsi);
 
   // Start the emu thread
-  s_is_booting.Set();
+  s_state.store(State::Starting);
   s_emu_thread = std::thread(EmuThread, std::ref(system), std::move(boot), prepared_wsi);
   return true;
 }
@@ -281,15 +282,13 @@ static void ResetRumble()
 // Called from GUI thread
 void Stop(Core::System& system)  // - Hammertime!
 {
-  if (GetState() == State::Stopping || GetState() == State::Uninitialized)
+  const State state = s_state.load();
+  if (state == State::Stopping || state == State::Uninitialized)
     return;
 
-#ifdef USE_RETRO_ACHIEVEMENTS
   AchievementManager::GetInstance().CloseGame();
-  AchievementManager::GetInstance().SetDisabled(false);
-#endif  // USE_RETRO_ACHIEVEMENTS
 
-  s_is_stopping = true;
+  s_state.store(State::Stopping);
 
   CallOnStateChangedCallbacks(State::Stopping);
 
@@ -352,9 +351,9 @@ static void CPUSetInitialExecutionState(bool force_paused = false)
 {
   // The CPU starts in stepping state, and will wait until a new state is set before executing.
   // SetState must be called on the host thread, so we defer it for later.
-  QueueHostJob([force_paused](Core::System&) {
+  QueueHostJob([force_paused](Core::System& system) {
     bool paused = SConfig::GetInstance().bBootToPause || force_paused;
-    SetState(paused ? State::Paused : State::Running);
+    SetState(system, paused ? State::Paused : State::Running);
     Host_UpdateDisasmDialog();
     Host_UpdateMainFrame();
     Host_Message(HostMessageID::WMUserCreate);
@@ -394,11 +393,15 @@ static void CpuThread(Core::System& system, const std::optional<std::string>& sa
       File::Delete(*savestate_path);
   }
 
-  s_is_started = true;
+  // If s_state is Starting, change it to Running. But if it's already been set to Stopping
+  // by the host thread, don't change it.
+  State expected = State::Starting;
+  s_state.compare_exchange_strong(expected, State::Running);
+
   {
 #ifndef _WIN32
     std::string gdb_socket = Config::Get(Config::MAIN_GDB_SOCKET);
-    if (!gdb_socket.empty())
+    if (!gdb_socket.empty() && !AchievementManager::GetInstance().IsHardcoreModeActive())
     {
       GDBStub::InitLocal(gdb_socket.data());
       CPUSetInitialExecutionState(true);
@@ -407,7 +410,7 @@ static void CpuThread(Core::System& system, const std::optional<std::string>& sa
 #endif
     {
       int gdb_port = Config::Get(Config::MAIN_GDB_PORT);
-      if (gdb_port > 0)
+      if (gdb_port > 0 && !AchievementManager::GetInstance().IsHardcoreModeActive())
       {
         GDBStub::Init(gdb_port);
         CPUSetInitialExecutionState(true);
@@ -425,8 +428,6 @@ static void CpuThread(Core::System& system, const std::optional<std::string>& sa
 #ifdef USE_MEMORYWATCHER
   s_memory_watcher.reset();
 #endif
-
-  s_is_started = false;
 
   if (exception_handler)
     EMM::UninstallExceptionHandler();
@@ -453,12 +454,15 @@ static void FifoPlayerThread(Core::System& system, const std::optional<std::stri
   if (auto cpu_core = system.GetFifoPlayer().GetCPUCore())
   {
     system.GetPowerPC().InjectExternalCPUCore(cpu_core.get());
-    s_is_started = true;
+
+    // If s_state is Starting, change it to Running. But if it's already been set to Stopping
+    // by the host thread, don't change it.
+    State expected = State::Starting;
+    s_state.compare_exchange_strong(expected, State::Running);
 
     CPUSetInitialExecutionState();
     system.GetCPU().Run();
 
-    s_is_started = false;
     system.GetPowerPC().InjectExternalCPUCore(nullptr);
     system.GetFifoPlayer().Close();
   }
@@ -479,10 +483,7 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
 {
   CallOnStateChangedCallbacks(State::Starting);
   Common::ScopeGuard flag_guard{[] {
-    s_is_booting.Clear();
-    s_is_started = false;
-    s_is_stopping = false;
-    s_wants_determinism = false;
+    s_state.store(State::Uninitialized);
 
     CallOnStateChangedCallbacks(State::Uninitialized);
 
@@ -557,8 +558,6 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
            NetPlay::IsNetPlayRunning() ? &(boot_session_data.GetNetplaySettings()->sram) : nullptr);
 
   Common::ScopeGuard hw_guard{[&system] {
-    // We must set up this flag before executing HW::Shutdown()
-    s_hardware_initialized = false;
     INFO_LOG_FMT(CONSOLE, "{}", StopMessage(false, "Shutting down HW"));
     HW::Shutdown(system);
     INFO_LOG_FMT(CONSOLE, "{}", StopMessage(false, "HW shutdown"));
@@ -601,10 +600,6 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
   }
 
   AudioCommon::PostInitSoundStream(system);
-
-  // The hardware is initialized.
-  s_hardware_initialized = true;
-  s_is_booting.Clear();
 
   // Set execution state to known values (CPU/FIFO/Audio Paused)
   system.GetCPU().Break();
@@ -698,13 +693,12 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
 
 // Set or get the running state
 
-void SetState(State state, bool report_state_change)
+void SetState(Core::System& system, State state, bool report_state_change)
 {
   // State cannot be controlled until the CPU Thread is operational
-  if (!IsRunningAndStarted())
+  if (s_state.load() != State::Running)
     return;
 
-  auto& system = Core::System::GetInstance();
   switch (state)
   {
   case State::Paused:
@@ -728,27 +722,16 @@ void SetState(State state, bool report_state_change)
   // Certain callers only change the state momentarily. Sending a callback for them causes
   // unwanted updates, such as the Pause/Play button flickering between states on frame advance.
   if (report_state_change)
-    CallOnStateChangedCallbacks(GetState());
+    CallOnStateChangedCallbacks(GetState(system));
 }
 
-State GetState()
+State GetState(Core::System& system)
 {
-  if (s_is_stopping)
-    return State::Stopping;
-
-  if (s_hardware_initialized)
-  {
-    auto& system = Core::System::GetInstance();
-    if (system.GetCPU().IsStepping())
-      return State::Paused;
-
-    return State::Running;
-  }
-
-  if (s_is_booting.IsSet())
-    return State::Starting;
-
-  return State::Uninitialized;
+  const State state = s_state.load();
+  if (state == State::Running && system.GetCPU().IsStepping())
+    return State::Paused;
+  else
+    return state;
 }
 
 static std::string GenerateScreenshotFolderPath()
@@ -788,21 +771,21 @@ static std::string GenerateScreenshotName()
 
 void SaveScreenShot()
 {
-  Core::RunAsCPUThread([] { g_frame_dumper->SaveScreenshot(GenerateScreenshotName()); });
+  const Core::CPUThreadGuard guard(Core::System::GetInstance());
+  g_frame_dumper->SaveScreenshot(GenerateScreenshotName());
 }
 
 void SaveScreenShot(std::string_view name)
 {
-  Core::RunAsCPUThread([&name] {
-    g_frame_dumper->SaveScreenshot(fmt::format("{}{}.png", GenerateScreenshotFolderPath(), name));
-  });
+  const Core::CPUThreadGuard guard(Core::System::GetInstance());
+  g_frame_dumper->SaveScreenshot(fmt::format("{}{}.png", GenerateScreenshotFolderPath(), name));
 }
 
 static bool PauseAndLock(Core::System& system, bool do_lock, bool unpause_on_unlock)
 {
   // WARNING: PauseAndLock is not fully threadsafe so is only valid on the Host Thread
 
-  if (!IsRunningAndStarted())
+  if (!IsRunning(system))
     return true;
 
   bool was_unpaused = true;
@@ -837,30 +820,14 @@ static bool PauseAndLock(Core::System& system, bool do_lock, bool unpause_on_unl
   return was_unpaused;
 }
 
-void RunAsCPUThread(std::function<void()> function)
-{
-  auto& system = Core::System::GetInstance();
-  const bool is_cpu_thread = IsCPUThread();
-  bool was_unpaused = false;
-  if (!is_cpu_thread)
-    was_unpaused = PauseAndLock(system, true, true);
-
-  function();
-
-  if (!is_cpu_thread)
-    PauseAndLock(system, false, was_unpaused);
-}
-
-void RunOnCPUThread(std::function<void()> function, bool wait_for_completion)
+void RunOnCPUThread(Core::System& system, std::function<void()> function, bool wait_for_completion)
 {
   // If the CPU thread is not running, assume there is no active CPU thread we can race against.
-  if (!IsRunning() || IsCPUThread())
+  if (!IsRunning(system) || IsCPUThread())
   {
     function();
     return;
   }
-
-  auto& system = Core::System::GetInstance();
 
   // Pause the CPU (set it to stepping mode).
   const bool was_running = PauseAndLock(system, true, true);
@@ -920,13 +887,11 @@ void Callback_NewField(Core::System& system)
     {
       s_frame_step = false;
       system.GetCPU().Break();
-      CallOnStateChangedCallbacks(Core::GetState());
+      CallOnStateChangedCallbacks(Core::GetState(system));
     }
   }
 
-#ifdef USE_RETRO_ACHIEVEMENTS
   AchievementManager::GetInstance().DoFrame();
-#endif  // USE_RETRO_ACHIEVEMENTS
 }
 
 void UpdateTitle(Core::System& system)
@@ -1047,13 +1012,12 @@ void HostDispatchJobs(Core::System& system)
     HostJob job = std::move(s_host_jobs_queue.front());
     s_host_jobs_queue.pop();
 
-    // NOTE: Memory ordering is important. The booting flag needs to be
-    //   checked first because the state transition is:
-    //   Core::State::Uninitialized: s_is_booting -> s_hardware_initialized
-    //   We need to check variables in the same order as the state
-    //   transition, otherwise we race and get transient failures.
-    if (!job.run_after_stop && !s_is_booting.IsSet() && !IsRunning())
-      continue;
+    if (!job.run_after_stop)
+    {
+      const State state = s_state.load();
+      if (state == State::Stopping || state == State::Uninitialized)
+        continue;
+    }
 
     guard.unlock();
     job.job(system);
@@ -1062,26 +1026,24 @@ void HostDispatchJobs(Core::System& system)
 }
 
 // NOTE: Host Thread
-void DoFrameStep()
+void DoFrameStep(Core::System& system)
 {
-#ifdef USE_RETRO_ACHIEVEMENTS
   if (AchievementManager::GetInstance().IsHardcoreModeActive())
   {
     OSD::AddMessage("Frame stepping is disabled in RetroAchievements hardcore mode");
     return;
   }
-#endif  // USE_RETRO_ACHIEVEMENTS
-  if (GetState() == State::Paused)
+  if (GetState(system) == State::Paused)
   {
     // if already paused, frame advance for 1 frame
     s_stop_frame_step = false;
     s_frame_step = true;
-    SetState(State::Running, false);
+    SetState(system, State::Running, false);
   }
   else if (!s_frame_step)
   {
     // if not paused yet, pause immediately instead
-    SetState(State::Paused);
+    SetState(system, State::Paused);
   }
 }
 
@@ -1089,7 +1051,8 @@ void UpdateInputGate(bool require_focus, bool require_full_focus)
 {
   // If the user accepts background input, controls should pass even if an on screen interface is on
   const bool focus_passes =
-      !require_focus || (Host_RendererHasFocus() && !Host_UIBlocksControllerState());
+      !require_focus ||
+      ((Host_RendererHasFocus() || Host_TASInputHasFocus()) && !Host_UIBlocksControllerState());
   // Ignore full focus if we don't require basic focus
   const bool full_focus_passes =
       !require_focus || !require_full_focus || (focus_passes && Host_RendererHasFullFocus());

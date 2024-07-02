@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "DolphinQt/CheatSearchWidget.h"
+#include "DolphinQt/QtUtils/WrapInScrollArea.h"
 
 #include <functional>
 #include <optional>
@@ -174,6 +175,7 @@ void CheatSearchWidget::CreateWidgets()
     }
     QString aligned = m_session->GetAligned() ? tr("aligned") : tr("unaligned");
     session_info_label->setText(tr("%1, %2, %3, %4").arg(ranges).arg(space).arg(type).arg(aligned));
+    session_info_label->setWordWrap(true);
   }
 
   // i18n: This label is followed by a dropdown where the user can select things like "is equal to"
@@ -256,7 +258,8 @@ void CheatSearchWidget::CreateWidgets()
   layout->addWidget(m_info_label_1);
   layout->addWidget(m_info_label_2);
   layout->addWidget(m_address_table);
-  setLayout(layout);
+
+  WrapInScrollArea(this, layout);
 }
 
 void CheatSearchWidget::ConnectWidgets()
@@ -492,6 +495,7 @@ void CheatSearchWidget::OnAddressTableContextMenu()
   const u32 address = item->data(ADDRESS_TABLE_ADDRESS_ROLE).toUInt();
 
   QMenu* menu = new QMenu(this);
+  menu->setAttribute(Qt::WA_DeleteOnClose, true);
 
   menu->addAction(tr("Show in memory"), [this, address] { emit ShowMemory(address); });
   menu->addAction(tr("Add to watch"), this, [this, address] {
@@ -517,7 +521,7 @@ void CheatSearchWidget::OnDisplayHexCheckboxStateChanged()
     return;
 
   // If the game is running CheatsManager::OnFrameEnd will update values automatically.
-  if (Core::GetState() != Core::State::Running)
+  if (Core::GetState(m_system) != Core::State::Running)
     UpdateTableAllCurrentValues(UpdateSource::User);
 }
 

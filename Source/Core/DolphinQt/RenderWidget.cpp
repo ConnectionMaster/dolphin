@@ -37,6 +37,7 @@
 
 #ifdef _WIN32
 #include <Windows.h>
+#include <dwmapi.h>
 #endif
 
 RenderWidget::RenderWidget(QWidget* parent) : QWidget(parent)
@@ -69,7 +70,7 @@ RenderWidget::RenderWidget(QWidget* parent) : QWidget(parent)
   // (which results in them not getting called)
   connect(this, &RenderWidget::StateChanged, Host::GetInstance(), &Host::SetRenderFullscreen,
           Qt::DirectConnection);
-  connect(this, &RenderWidget::HandleChanged, Host::GetInstance(), &Host::SetRenderHandle,
+  connect(this, &RenderWidget::HandleChanged, this, &RenderWidget::OnHandleChanged,
           Qt::DirectConnection);
   connect(this, &RenderWidget::SizeChanged, Host::GetInstance(), &Host::ResizeSurface,
           Qt::DirectConnection);
@@ -131,6 +132,20 @@ void RenderWidget::dropEvent(QDropEvent* event)
   }
 
   State::LoadAs(Core::System::GetInstance(), path.toStdString());
+}
+
+void RenderWidget::OnHandleChanged(void* handle)
+{
+  if (handle)
+  {
+#ifdef _WIN32
+    // Remove rounded corners from the render window on Windows 11
+    const DWM_WINDOW_CORNER_PREFERENCE corner_preference = DWMWCP_DONOTROUND;
+    DwmSetWindowAttribute(reinterpret_cast<HWND>(handle), DWMWA_WINDOW_CORNER_PREFERENCE,
+                          &corner_preference, sizeof(corner_preference));
+#endif
+  }
+  Host::GetInstance()->SetRenderHandle(handle);
 }
 
 void RenderWidget::OnHideCursorChanged()
@@ -406,8 +421,11 @@ bool RenderWidget::event(QEvent* event)
   // Note that this event in Windows is not always aligned to the window that is highlighted,
   // it's the window that has keyboard and mouse focus
   case QEvent::WindowActivate:
-    if (m_should_unpause_on_focus && Core::GetState() == Core::State::Paused)
-      Core::SetState(Core::State::Running);
+    if (m_should_unpause_on_focus &&
+        Core::GetState(Core::System::GetInstance()) == Core::State::Paused)
+    {
+      Core::SetState(Core::System::GetInstance(), Core::State::Running);
+    }
 
     m_should_unpause_on_focus = false;
 
@@ -430,7 +448,8 @@ bool RenderWidget::event(QEvent* event)
 
     UpdateCursor();
 
-    if (Config::Get(Config::MAIN_PAUSE_ON_FOCUS_LOST) && Core::GetState() == Core::State::Running)
+    if (Config::Get(Config::MAIN_PAUSE_ON_FOCUS_LOST) &&
+        Core::GetState(Core::System::GetInstance()) == Core::State::Running)
     {
       // If we are declared as the CPU or GPU thread, it means that the real CPU or GPU thread
       // is waiting for us to finish showing a panic alert (with that panic alert likely being
@@ -438,7 +457,7 @@ bool RenderWidget::event(QEvent* event)
       if (!Core::IsCPUThread() && !Core::IsGPUThread())
       {
         m_should_unpause_on_focus = true;
-        Core::SetState(Core::State::Paused);
+        Core::SetState(Core::System::GetInstance(), Core::State::Paused);
       }
     }
 
@@ -494,7 +513,7 @@ bool RenderWidget::event(QEvent* event)
 
 void RenderWidget::PassEventToPresenter(const QEvent* event)
 {
-  if (!Core::IsRunningAndStarted())
+  if (!Core::IsRunning(Core::System::GetInstance()))
     return;
 
   switch (event->type())

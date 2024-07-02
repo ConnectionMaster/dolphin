@@ -94,13 +94,10 @@ enum class ConsoleType : u32
   ReservedTDEVSystem = 0x20000007,
 };
 
-// Run a function as the CPU thread. This is an RAII alternative to the RunAsCPUThread function.
-//
-// If constructed from the Host thread, the CPU thread is paused and the current thread temporarily
-// becomes the CPU thread.
-// If constructed from the CPU thread, nothing special happens.
-//
-// This should only be constructed from the CPU thread or the host thread.
+// This is an RAII alternative to using PauseAndLock. If constructed from the host thread, the CPU
+// thread is paused, and the current thread temporarily becomes the CPU thread. If constructed from
+// the CPU thread, nothing special happens. This should only be constructed on the CPU thread or the
+// host thread.
 //
 // Some functions use a parameter of this type to indicate that the function should only be called
 // from the CPU thread. If the parameter is a pointer, the function has a fallback for being called
@@ -137,17 +134,17 @@ void UndeclareAsHostThread();
 
 std::string StopMessage(bool main_thread, std::string_view message);
 
-bool IsRunning();
-bool IsRunningAndStarted();  // is running and the CPU loop has been entered
-bool IsCPUThread();          // this tells us whether we are the CPU thread.
+bool IsRunning(Core::System& system);
+bool IsRunningOrStarting(Core::System& system);
+bool IsCPUThread();  // this tells us whether we are the CPU thread.
 bool IsGPUThread();
 bool IsHostThread();
 
 bool WantsDeterminism();
 
 // [NOT THREADSAFE] For use by Host only
-void SetState(State state, bool report_state_change = true);
-State GetState();
+void SetState(Core::System& system, State state, bool report_state_change = true);
+State GetState(Core::System& system);
 
 void SaveScreenShot();
 void SaveScreenShot(std::string_view name);
@@ -158,18 +155,9 @@ void DisplayMessage(std::string message, int time_in_ms);
 void FrameUpdateOnCPUThread();
 void OnFrameEnd(Core::System& system);
 
-// Run a function as the CPU thread.
-//
-// If called from the Host thread, the CPU thread is paused and the current thread temporarily
-// becomes the CPU thread while running the function.
-// If called from the CPU thread, the function will be run directly.
-//
-// This should only be called from the CPU thread or the host thread.
-void RunAsCPUThread(std::function<void()> function);
-
 // Run a function on the CPU thread, asynchronously.
 // This is only valid to call from the host thread, since it uses PauseAndLock() internally.
-void RunOnCPUThread(std::function<void()> function, bool wait_for_completion);
+void RunOnCPUThread(Core::System& system, std::function<void()> function, bool wait_for_completion);
 
 // for calling back into UI code without introducing a dependency on it in core
 using StateChangedCallbackFunc = std::function<void(Core::State)>;
@@ -197,7 +185,7 @@ void QueueHostJob(std::function<void(Core::System&)> job, bool run_during_stop =
 // WMUserJobDispatch will be sent when something is added to the queue.
 void HostDispatchJobs(Core::System& system);
 
-void DoFrameStep();
+void DoFrameStep(Core::System& system);
 
 void UpdateInputGate(bool require_focus, bool require_full_focus = false);
 
